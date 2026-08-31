@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.5.0] - 2026-08-31
+
+### Added
+- **Top-Level Engine API** (`flux.go`, `helpers.go`, `options.go`, `input.go`):
+  - `flux.New(opts...)` constructor with fluent functional configuration (`WithCache`, `WithWorkers`, `WithSink`).
+  - `Spark(ctx, payload, tags...)`: High-throughput reactive execution with strict type validation (`JSON`, `Slice`, `Struct`), sequential multi-Circuit isolation, and output projection.
+  - `Conduct(ctx, req)`: State-driven candidate item scoring with entity hydration, dynamic output mutation, and silent omission of ineligibles.
+  - Fluent step construction helpers: `flux.Volt()`, `flux.Sink()`, `flux.Return()`, `flux.Abort()`.
+  - `types.StepProvider` interface for seamless step builder composition.
+
+---
+
 ## [0.4.0] - 2026-08-31
 
 ### Added

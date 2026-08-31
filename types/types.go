@@ -70,9 +70,23 @@ func (n *Node) WithCondition(cond string) *Node {
 	return n
 }
 
-// Step appends one or more execution steps to the node.
-func (n *Node) Step(steps ...*StepDefinition) *Node {
-	n.Steps = append(n.Steps, steps...)
+// StepProvider provides a StepDefinition.
+type StepProvider interface {
+	ToStep() *StepDefinition
+}
+
+// ToStep allows *StepDefinition to satisfy StepProvider.
+func (s *StepDefinition) ToStep() *StepDefinition {
+	return s
+}
+
+// Step appends one or more execution steps (or step builders) to the node.
+func (n *Node) Step(steps ...StepProvider) *Node {
+	for _, s := range steps {
+		if s != nil {
+			n.Steps = append(n.Steps, s.ToStep())
+		}
+	}
 	return n
 }
 
