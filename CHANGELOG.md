@@ -7,6 +7,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.4.0] - 2026-08-31
+
+### Added
+- **Cache Backend Contract & MemoryCache** (`internal/cache`):
+  - Interface definition matching distributed caching capabilities (`Get`, `Set`, `IncrementSlidingWindow`, `SetAdd`, `SetMembers`, `Exists`, `Delete`).
+  - Thread-safe in-memory cache backend with TTL expiration, sliding time-window counters, and set operations.
+- **Circuit Registry & FBWF Binary Format** (`internal/registry`):
+  - Flux Binary Wire Format (`FBWF`) 32-byte header, string arena pool, and 64-byte aligned Step array with ECMA CRC64 checksum validation.
+  - Zero-downtime atomic hot-swapping via copy-on-write snapshots and tag index mappings.
+- **Candidate Item Catalog** (`internal/catalog`):
+  - High-throughput candidate item store with embedded qualification Circuits and expiration lifecycle tracking.
+  - Tag-based multi-index query filtering.
+- **Named Sink Registry & Async Dispatch Pipeline** (`internal/sink`):
+  - Pluggable external sink registration (`Sink` and `FuncSink`).
+  - Asynchronous dispatch queue with bounded worker threads and backpressure execution.
+
+### Changed
+- Hardened `FrameArena.Reset()` (`internal/vm/regfile.go`) to explicitly zero out handle references for immediate GC reclamation.
+
+---
+
 ## [0.3.0] - 2026-08-31
 
 ### Added

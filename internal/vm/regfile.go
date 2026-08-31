@@ -50,6 +50,9 @@ func NewFrameArena() *FrameArena {
 func (fa *FrameArena) Reset() {
 	fa.Regs.Reset()
 	fa.ArenaLen = 0
+	for i := range fa.Handles {
+		fa.Handles[i] = nil
+	}
 	fa.Handles = fa.Handles[:0]
 }
 
