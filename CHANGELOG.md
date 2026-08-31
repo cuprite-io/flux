@@ -7,6 +7,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.3.0] - 2026-08-31
+
+### Added
+- **Circuit StateContext** (`internal/state`):
+  - Execution context managing immutable input base, thread-safe scratchpad, and delta mutation tracking for forked parallel child branches.
+  - $O(1)$ atomic `DeadMask` bitmask operations for branch liveness and condition pruning.
+  - Adapter connecting `state.Context` with `vm.VMContext`.
+- **Adaptive Dual-Path Parallel Pool** (`internal/pool`):
+  - Pre-warmed `WorkerPool` sized across `GOMAXPROCS` with task queue buffering and backpressure execution.
+  - Reusable zero-allocation atomic countdown latch (`Latch`).
+  - Worker thread panic isolation boundary ensuring individual node errors do not crash host process.
+- **TreeWalker Circuit Engine** (`internal/engine`):
+  - Hierarchical tree evaluator navigating nodes from root to leaf branches.
+  - Adaptive dual-path parallel dispatch: inline fast-path for single child nodes and concurrent work-stealing dispatch for $\ge 2$ children.
+  - Sequential step evaluation pipeline (`StepVolt`, `StepSink`, `StepReturn`, `StepAbort`).
+  - Condition evaluation with sub-tree pruning.
+
+---
+
 ## [0.2.0] - 2026-08-31
 
 ### Added
