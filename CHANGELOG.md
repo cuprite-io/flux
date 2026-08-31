@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.6.0] - 2026-08-31
+
+### Added
+- **Declarative JSON/YAML Loaders** (`declarative.go`):
+  - Parse `.circuit.json`, `.circuit.yaml`, `.item.json`, and `.item.yaml` files.
+  - `LoadCircuitJSON`, `LoadCircuitYAML`, `LoadCircuitFile`, `LoadItemJSON`, `LoadItemYAML`, `LoadItemFile`, `LoadCircuitsFromDir`.
+- **Standalone CLI Tool** (`cmd/flux`):
+  - `flux eval <circuit.json> --payload <payload.json>`: Runs offline rule evaluation against test payloads.
+  - `flux validate <files...>`: Statically validates Circuit and Item files for syntax and schema errors.
+  - `flux inspect <circuit.json>`: Renders visual ASCII Circuit tree hierarchy with step counts and guard condition annotations.
+  - `flux version`: Prints engine version and build info.
+
+---
+
 ## [0.5.0] - 2026-08-31
 
 ### Added
