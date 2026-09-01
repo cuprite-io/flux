@@ -21,8 +21,8 @@ func TestCompiler_VoltExpressions(t *testing.T) {
 	}{
 		{
 			name:     "Arithmetic & Ternary",
-			expr:     `amount >= 1000.0 ? amount * 0.20 : 0.0`,
-			input:    map[string]any{"amount": 4500.0},
+			expr:     `payload.amount >= 1000.0 ? payload.amount * 0.20 : 0.0`,
+			input:    map[string]any{"payload": map[string]any{"amount": 4500.0}},
 			expected: 900.0,
 		},
 		{

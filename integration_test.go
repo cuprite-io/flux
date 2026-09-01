@@ -84,7 +84,7 @@ func TestDistributed_CapacitorReplicationConvergence(t *testing.T) {
 	// 6. Register Candidate Item on Flux 2 from declarative JSON
 	itemJSON := `{
 		"id": "offer_titan_slayer",
-		"tags": ["offers:boss_rewards"],
+		"category": "offers:boss_rewards",
 		"data": {
 			"sku": "SKU-TITAN-01"
 		},

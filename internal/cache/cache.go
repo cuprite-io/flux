@@ -26,6 +26,10 @@ type CacheBackend interface {
 	SetMembers(ctx context.Context, key string) ([]string, error)
 	SetRemove(ctx context.Context, key string, member any) (bool, error)
 	SetIsMember(ctx context.Context, key string, member any) (bool, error)
+	MapSet(ctx context.Context, key, field string, value any, ttl time.Duration) (bool, error)
+	MapGetScan(ctx context.Context, key, field string, dst any) (bool, error)
+	MapGetAll(ctx context.Context, key string) (map[string]string, error)
+	MapRemove(ctx context.Context, key, field string) (bool, error)
 	Close() error
 }
 
@@ -43,6 +47,7 @@ type MemoryCache struct {
 	mu      sync.RWMutex
 	data    map[string]cacheEntry
 	sets    map[string]map[string]struct{}
+	maps    map[string]map[string]string
 	windows map[string]*windowEntry
 }
 
@@ -51,6 +56,7 @@ func NewMemoryCache() *MemoryCache {
 	return &MemoryCache{
 		data:    make(map[string]cacheEntry),
 		sets:    make(map[string]map[string]struct{}),
+		maps:    make(map[string]map[string]string),
 		windows: make(map[string]*windowEntry),
 	}
 }
@@ -239,11 +245,76 @@ func (m *MemoryCache) SetIsMember(ctx context.Context, key string, member any) (
 	return exists, nil
 }
 
+func (m *MemoryCache) MapSet(ctx context.Context, key, field string, value any, ttl time.Duration) (bool, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	mp, ok := m.maps[key]
+	if !ok {
+		mp = make(map[string]string)
+		m.maps[key] = mp
+	}
+
+	mp[field] = formatMember(value)
+	return true, nil
+}
+
+func (m *MemoryCache) MapGetScan(ctx context.Context, key, field string, dst any) (bool, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+
+	mp, ok := m.maps[key]
+	if !ok {
+		return false, nil
+	}
+	val, ok := mp[field]
+	if !ok {
+		return false, nil
+	}
+
+	if err := json.Unmarshal([]byte(val), dst); err != nil {
+		return false, err
+	}
+	return true, nil
+}
+
+func (m *MemoryCache) MapGetAll(ctx context.Context, key string) (map[string]string, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+
+	mp, ok := m.maps[key]
+	if !ok {
+		return nil, nil
+	}
+
+	res := make(map[string]string, len(mp))
+	for k, v := range mp {
+		res[k] = v
+	}
+	return res, nil
+}
+
+func (m *MemoryCache) MapRemove(ctx context.Context, key, field string) (bool, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	mp, ok := m.maps[key]
+	if !ok {
+		return false, nil
+	}
+	if _, exists := mp[field]; !exists {
+		return false, nil
+	}
+	delete(mp, field)
+	return true, nil
+}
+
 func (m *MemoryCache) Close() error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.data = nil
 	m.sets = nil
+	m.maps = nil
 	m.windows = nil
 	return nil
 }

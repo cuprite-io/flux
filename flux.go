@@ -168,8 +168,9 @@ func (e *Engine) Conduct(ctx context.Context, req *types.ConductRequest) (*types
 
 	startTime := time.Now()
 
-	// 1. Fetch Candidate Items matching filter tags
-	items := e.catalog.GetByTags(ctx, req.Tags...)
+	// 1. Fetch Candidate Items matching target category partition in 1 call
+	targetCategory := req.TargetCategory()
+	items := e.catalog.GetByCategory(ctx, targetCategory)
 	evaluatedCount := len(items)
 
 	if evaluatedCount == 0 {

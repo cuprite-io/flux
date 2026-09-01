@@ -126,14 +126,25 @@ func (c *Circuit) WithRoot(root *Node) *Circuit {
 	return c
 }
 
-// Item represents a candidate item in the Catalog (e.g. promotional offer, mission, pricing rule)
-// with an embedded qualification and transformation Circuit.
+// Item represents a candidate item in the Catalog with an embedded qualification and transformation Circuit.
 type Item struct {
 	ID        string         `json:"id"`
+	Category  string         `json:"category,omitempty"`
 	Tags      []string       `json:"tags,omitempty"`
 	Data      map[string]any `json:"data,omitempty"`
 	Circuit   *Circuit       `json:"circuit"`
 	ExpiresAt time.Time      `json:"expires_at,omitempty"`
+}
+
+// PrimaryCategory returns the primary category for partitioned storage, falling back to Tags[0] or "default".
+func (i *Item) PrimaryCategory() string {
+	if i.Category != "" {
+		return i.Category
+	}
+	if len(i.Tags) > 0 {
+		return i.Tags[0]
+	}
+	return "default"
 }
 
 // SparkResult represents the outcome of a Spark single-payload execution.
@@ -148,11 +159,23 @@ type SparkResult struct {
 
 // ConductRequest encapsulates query parameters for candidate item retrieval and evaluation.
 type ConductRequest struct {
-	EntityID string         `json:"entity_id"` // Target identifier (e.g. "user_101")
-	Tags     []string       `json:"tags"`      // Candidate item pre-filter tags (e.g. ["offers:gaming"])
-	Context  map[string]any `json:"context"`   // Ephemeral request context (e.g. {"cart_total": 150.0})
-	TopK     int            `json:"top_k"`     // Max items to return (0 = all qualified)
-	Timeout  time.Duration  `json:"timeout"`   // Execution timeout budget
+	EntityID string         `json:"entity_id"`          // Target entity identifier
+	Category string         `json:"category,omitempty"` // Primary candidate category partition
+	Tags     []string       `json:"tags,omitempty"`     // Candidate item pre-filter tags
+	Context  map[string]any `json:"context,omitempty"`  // Ephemeral request context
+	TopK     int            `json:"top_k,omitempty"`    // Max items to return (0 = all qualified)
+	Timeout  time.Duration  `json:"timeout,omitempty"`  // Execution timeout budget
+}
+
+// TargetCategory resolves the target category partition for the Conduct evaluation.
+func (r *ConductRequest) TargetCategory() string {
+	if r.Category != "" {
+		return r.Category
+	}
+	if len(r.Tags) > 0 {
+		return r.Tags[0]
+	}
+	return "default"
 }
 
 // EvaluatedItem represents a qualified, dynamically modified candidate item.

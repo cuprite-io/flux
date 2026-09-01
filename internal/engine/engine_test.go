@@ -29,11 +29,11 @@ func TestEngine_ParallelTreeExecution(t *testing.T) {
 	// Build hierarchical tree:
 	// Root Node -> Child A (Parallel) & Child B (Parallel)
 	root := types.NewNode("parse_event").
-		Step(&types.StepDefinition{Type: types.StepVolt, Script: `amount >= 1000.0`})
+		Step(&types.StepDefinition{Type: types.StepVolt, Script: `payload.amount >= 1000.0`})
 
 	// Child A: High value check
 	nodeA := types.NewNode("high_value_branch").
-		WithCondition(`amount >= 1000.0`).
+		WithCondition(`payload.amount >= 1000.0`).
 		Step(&types.StepDefinition{
 			Type:     types.StepSink,
 			SinkName: "slack_alerts",
@@ -45,7 +45,7 @@ func TestEngine_ParallelTreeExecution(t *testing.T) {
 
 	// Child B: Fast path check
 	nodeB := types.NewNode("standard_branch").
-		WithCondition(`amount < 1000.0`).
+		WithCondition(`payload.amount < 1000.0`).
 		Step(&types.StepDefinition{
 			Type:      types.StepReturn,
 			ReturnMap: map[string]any{"status": "STANDARD"},
@@ -80,14 +80,14 @@ func TestEngine_DeeplyNestedPruning(t *testing.T) {
 
 	// Root -> Child (Condition: false) -> SubChild (should NEVER execute)
 	var subChildExecuted bool
-	subChild := types.NewNode("unreachable_subchild").
+	subChild := types.NewNode("nested_subchild").
 		Step(&types.StepDefinition{
 			Type: types.StepVolt,
-			Script: `amount > 0.0`,
+			Script: `payload.amount > 0.0`,
 		})
 
 	child := types.NewNode("failing_condition_node").
-		WithCondition(`amount > 100000.0`).
+		WithCondition(`payload.amount > 100000.0`).
 		AddChildren(subChild)
 
 	root := types.NewNode("root").
@@ -115,10 +115,10 @@ func BenchmarkEngine_TreeExecution(b *testing.B) {
 	exec := engine.NewExecutor(comp, pool.GetDefaultPool(), nil)
 
 	root := types.NewNode("root").
-		Step(&types.StepDefinition{Type: types.StepVolt, Script: `amount > 100.0`})
+		Step(&types.StepDefinition{Type: types.StepVolt, Script: `payload.amount > 100.0`})
 
 	childA := types.NewNode("child_a").
-		WithCondition(`amount > 500.0`).
+		WithCondition(`payload.amount > 500.0`).
 		Step(&types.StepDefinition{
 			Type:      types.StepReturn,
 			ReturnMap: map[string]any{"tier": "GOLD"},

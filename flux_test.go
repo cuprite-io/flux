@@ -77,10 +77,10 @@ func TestFlux_SparkEndToEnd(t *testing.T) {
 
 	// 1. Build a Tree-based Circuit with parallel child branches
 	root := types.NewNode("filter_high_value").
-		Step(flux.Volt(`amount >= 1000.0`))
+		Step(flux.Volt(`payload.amount >= 1000.0`))
 
 	nodeA := types.NewNode("alert_branch").
-		WithCondition(`amount >= 1000.0`).
+		WithCondition(`payload.amount >= 1000.0`).
 		Step(flux.Sink("fraud_alerts", "kafka_sink")).
 		Step(flux.Return(map[string]any{
 			"status": "FLAGGED",

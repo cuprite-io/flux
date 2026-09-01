@@ -37,10 +37,11 @@ type rawCircuit struct {
 }
 
 type rawItem struct {
-	ID      string          `json:"id" yaml:"id"`
-	Tags    []string        `json:"tags,omitempty" yaml:"tags,omitempty"`
-	Data    map[string]any  `json:"data,omitempty" yaml:"data,omitempty"`
-	Circuit *rawCircuit     `json:"circuit,omitempty" yaml:"circuit,omitempty"`
+	ID       string         `json:"id" yaml:"id"`
+	Category string         `json:"category,omitempty" yaml:"category,omitempty"`
+	Tags     []string       `json:"tags,omitempty" yaml:"tags,omitempty"`
+	Data     map[string]any `json:"data,omitempty" yaml:"data,omitempty"`
+	Circuit  *rawCircuit    `json:"circuit,omitempty" yaml:"circuit,omitempty"`
 }
 
 func parseStepType(t string) (types.StepType, error) {
@@ -152,9 +153,10 @@ func LoadItemJSON(data []byte) (*types.Item, error) {
 	}
 
 	item := &types.Item{
-		ID:   ri.ID,
-		Tags: ri.Tags,
-		Data: ri.Data,
+		ID:       ri.ID,
+		Category: ri.Category,
+		Tags:     ri.Tags,
+		Data:     ri.Data,
 	}
 
 	if ri.Circuit != nil {
@@ -182,9 +184,10 @@ func LoadItemFile(filePath string) (*types.Item, error) {
 			return nil, fmt.Errorf("flux: failed to parse item YAML: %w", err)
 		}
 		item := &types.Item{
-			ID:   ri.ID,
-			Tags: ri.Tags,
-			Data: ri.Data,
+			ID:       ri.ID,
+			Category: ri.Category,
+			Tags:     ri.Tags,
+			Data:     ri.Data,
 		}
 		if ri.Circuit != nil {
 			c, err := convertCircuit(ri.Circuit)

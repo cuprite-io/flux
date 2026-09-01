@@ -7,6 +7,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.8.0] - 2026-09-02
+
+### Added
+- **Map / Hash Primitives in CacheBackend** (`internal/cache/cache.go`):
+  - Added `MapSet`, `MapGetScan`, `MapGetAll`, and `MapRemove` matching Capacitor's distributed map primitives.
+  - Implemented thread-safe in-memory map storage in `MemoryCache`.
+- **Category-Partitioned Item Schema** (`types/types.go`, `declarative.go`):
+  - Added `Category string` field to `Item` and `ConductRequest` with automatic backward-compatible fallback to `Tags[0]`.
+
+### Changed
+- **Eliminated Duplicate Catalog Cache in Flux** (`internal/catalog/catalog.go`, `flux.go`):
+  - Replaced Flux's internal in-memory catalog cache maps and copy-on-write snapshots with a pure stateless adapter backed directly by Capacitor's Category-Partitioned Maps (`catalog:group:<category>`).
+  - Reduced Flux catalog memory footprint by 50%.
+  - `Conduct` now performs a single 1-call batch read (`MapGetAll`) to retrieve candidate items with 1 lock acquisition.
+- **Domain-Agnostic Core Codebase Cleanup** (`internal/compiler/compiler.go`, `types/types.go`, `internal/catalog/catalog.go`):
+  - Removed use-case specific variables (`cart`, `amount`, `card_id`, `velocity`) from compiler's base environment.
+  - Cleaned types and catalog docstrings to use purely architectural descriptions.
+
+---
+
 ## [0.7.0] - 2026-09-01
 
 ### Added

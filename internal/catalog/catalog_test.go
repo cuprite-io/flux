@@ -2,6 +2,7 @@ package catalog_test
 
 import (
 	"context"
+	"fmt"
 	"testing"
 	"time"
 
@@ -10,67 +11,91 @@ import (
 	"github.com/cuprite-io/flux/types"
 )
 
-func TestCatalog_PutGetAndTagFilter(t *testing.T) {
+func TestCatalog_CategoryPartitionAndFilter(t *testing.T) {
+	ctx := context.Background()
 	cat := catalog.New(cache.NewMemoryCache())
 
 	item1 := &types.Item{
-		ID:   "item_1",
-		Tags: []string{"offers:gaming", "region:us"},
-		Data: map[string]any{"discount": 0.15},
+		ID:       "item_1",
+		Category: "offers:gaming",
+		Data:     map[string]any{"discount": 0.15},
 	}
 	item2 := &types.Item{
-		ID:   "item_2",
-		Tags: []string{"offers:gaming", "region:eu"},
-		Data: map[string]any{"discount": 0.20},
+		ID:       "item_2",
+		Category: "offers:gaming",
+		Data:     map[string]any{"discount": 0.20},
 	}
 	item3 := &types.Item{
 		ID:        "item_3",
-		Tags:      []string{"offers:gaming"},
+		Category:  "offers:gaming",
 		Data:      map[string]any{"discount": 0.50},
 		ExpiresAt: time.Now().Add(-1 * time.Hour), // Expired!
 	}
+	itemOther := &types.Item{
+		ID:       "item_other",
+		Category: "offers:retail",
+		Data:     map[string]any{"discount": 0.05},
+	}
 
-	_ = cat.Put(context.Background(), item1)
-	_ = cat.Put(context.Background(), item2)
-	_ = cat.Put(context.Background(), item3)
+	_ = cat.Put(ctx, item1)
+	_ = cat.Put(ctx, item2)
+	_ = cat.Put(ctx, item3)
+	_ = cat.Put(ctx, itemOther)
 
-	// Get by ID
-	it, err := cat.Get(context.Background(), "item_1")
+	// Get by category & ID
+	it, err := cat.Get(ctx, "offers:gaming", "item_1")
 	if err != nil || it.ID != "item_1" {
 		t.Fatalf("expected item_1, got err: %v", err)
 	}
 
 	// Expired item should return ErrItemNotFound
-	_, err = cat.Get(context.Background(), "item_3")
+	_, err = cat.Get(ctx, "offers:gaming", "item_3")
 	if err == nil {
 		t.Errorf("expected expired item_3 to return error")
 	}
 
-	// Filter by tag: offers:gaming (item3 expired, so only 2 return)
-	gamingItems := cat.GetByTags(context.Background(), "offers:gaming")
+	// Fetch entire category bucket (item3 expired, itemOther in different partition -> returns 2)
+	gamingItems := cat.GetByCategory(ctx, "offers:gaming")
 	if len(gamingItems) != 2 {
-		t.Errorf("expected 2 active gaming items, got %d", len(gamingItems))
+		t.Fatalf("expected 2 active gaming items, got %d", len(gamingItems))
+	}
+
+	// Fetch retail category bucket
+	retailItems := cat.GetByCategory(ctx, "offers:retail")
+	if len(retailItems) != 1 || retailItems[0].ID != "item_other" {
+		t.Fatalf("expected 1 retail item, got %+v", retailItems)
+	}
+
+	// Delete item1 from gaming category
+	err = cat.Delete(ctx, "offers:gaming", "item_1")
+	if err != nil {
+		t.Fatalf("unexpected delete error: %v", err)
+	}
+
+	remaining := cat.GetByCategory(ctx, "offers:gaming")
+	if len(remaining) != 1 || remaining[0].ID != "item_2" {
+		t.Fatalf("expected 1 item after deletion, got %+v", remaining)
 	}
 }
 
-func BenchmarkCatalog_TagQuery(b *testing.B) {
+func BenchmarkCatalog_CategoryQuery(b *testing.B) {
+	ctx := context.Background()
 	cat := catalog.New(cache.NewMemoryCache())
 
 	for i := 0; i < 1000; i++ {
-		_ = cat.Put(context.Background(), &types.Item{
-			ID:   string(rune(i)),
-			Tags: []string{"offers:all", "tag:bench"},
-			Data: map[string]any{"idx": i},
+		_ = cat.Put(ctx, &types.Item{
+			ID:       fmt.Sprintf("item_%d", i),
+			Category: "tag:bench",
+			Data:     map[string]any{"idx": i},
 		})
 	}
 
-	b.ResetTimer()
 	b.ReportAllocs()
 
-	for i := 0; i < b.N; i++ {
-		items := cat.GetByTags(context.Background(), "tag:bench")
-		if len(items) == 0 {
-			b.Fatal("no items returned")
+	for b.Loop() {
+		items := cat.GetByCategory(ctx, "tag:bench")
+		if len(items) != 1000 {
+			b.Fatal("missing items in bench")
 		}
 	}
 }
