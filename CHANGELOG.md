@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.8.1] - 2026-09-02
+
+### Documentation
+- Completely updated `README.md` with:
+  - Official centered mascot header matching the Cuprite project family styling.
+  - Comprehensive quickstart guides for `Spark` reactive streams and `Conduct` candidate scoring.
+  - Declarative JSON/YAML specification examples and directory loading.
+  - Complete VoltScript standard library reference table (extended CEL dialect).
+  - Distributed architecture guide with Capacitor.
+  - Real-world production examples index (`examples/`).
+
+---
+
 ## [0.8.0] - 2026-09-02
 
 ### Added
