@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 
 	"github.com/cuprite-io/flux/internal/compiler"
 	"github.com/cuprite-io/flux/internal/pool"
@@ -53,6 +54,7 @@ func (e *Executor) ExecuteCircuit(ctx context.Context, circuit *types.Circuit, s
 	if sctx.IsAborted() {
 		return &types.SparkResult{
 			OriginalInput:    sctx.OriginalInput,
+			ReturnedData:     sctx.ReturnData(),
 			Passed:           false,
 			ExecutedCircuits: []string{circuit.ID},
 			Errors:           sctx.Errors(),
@@ -154,19 +156,26 @@ func (e *Executor) executeStep(ctx context.Context, step *types.StepDefinition, 
 		if step.Script == "" {
 			return nil
 		}
+		// Parse and evaluate set() assignments if present
+		setStatements := extractSetStatements(step.Script)
+		for _, stmt := range setStatements {
+			prog, err := e.compiler.Compile(stmt.expr)
+			if err == nil {
+				snapshot := sctx.Snapshot()
+				out, _, errEval := prog.Eval(snapshot)
+				if errEval == nil && out != nil {
+					sctx.Set(stmt.key, out.Value())
+				}
+			}
+		}
+
 		prog, err := e.compiler.Compile(step.Script)
 		if err != nil {
 			return err
 		}
-		// Evaluate CEL / Volt script against current snapshot
 		snapshot := sctx.Snapshot()
-		out, _, err := prog.Eval(snapshot)
-		if err != nil {
-			return err
-		}
-		// If script called set(), reflect variables into scratchpad
-		_ = out
-		return nil
+		_, _, err = prog.Eval(snapshot)
+		return err
 
 	case types.StepSink:
 		if step.Condition != "" {
@@ -223,4 +232,87 @@ func (e *Executor) evalCondition(ctx context.Context, expr string, sctx *state.C
 		return b, nil
 	}
 	return false, fmt.Errorf("condition %q did not evaluate to boolean", expr)
+}
+
+type setStmt struct {
+	key  string
+	expr string
+}
+
+func extractSetStatements(script string) []setStmt {
+	var stmts []setStmt
+	idx := 0
+	for {
+		pos := strings.Index(script[idx:], "set(")
+		if pos == -1 {
+			break
+		}
+		start := idx + pos + 4
+		// Find comma
+		commaPos := -1
+		quoteChar := byte(0)
+		inQuote := false
+
+		for i := start; i < len(script); i++ {
+			c := script[i]
+			if !inQuote && (c == '\'' || c == '"') {
+				inQuote = true
+				quoteChar = c
+				continue
+			}
+			if inQuote && c == quoteChar {
+				inQuote = false
+				continue
+			}
+			if !inQuote && c == ',' {
+				commaPos = i
+				break
+			}
+		}
+
+		if commaPos == -1 {
+			idx = start
+			continue
+		}
+
+		keyPart := strings.TrimSpace(script[start:commaPos])
+		keyPart = strings.Trim(keyPart, "'\"")
+
+		// Find matching closing paren
+		parenCount := 1
+		exprEnd := -1
+		inQuote = false
+		for i := commaPos + 1; i < len(script); i++ {
+			c := script[i]
+			if !inQuote && (c == '\'' || c == '"') {
+				inQuote = true
+				quoteChar = c
+				continue
+			}
+			if inQuote && c == quoteChar {
+				inQuote = false
+				continue
+			}
+			if !inQuote {
+				if c == '(' {
+					parenCount++
+				} else if c == ')' {
+					parenCount--
+					if parenCount == 0 {
+						exprEnd = i
+						break
+					}
+				}
+			}
+		}
+
+		if exprEnd != -1 {
+			exprPart := strings.TrimSpace(script[commaPos+1 : exprEnd])
+			stmts = append(stmts, setStmt{key: keyPart, expr: exprPart})
+			idx = exprEnd + 1
+		} else {
+			idx = commaPos + 1
+		}
+	}
+	return stmts
 }

@@ -9,6 +9,26 @@ import (
 	"github.com/cuprite-io/flux/types"
 )
 
+type stateContextKey struct{}
+
+// WithContext stores a *state.Context inside a standard context.Context.
+func WithContext(parent context.Context, sctx *Context) context.Context {
+	return context.WithValue(parent, stateContextKey{}, sctx)
+}
+
+// FromContext retrieves the *state.Context from a context.Context if present.
+func FromContext(ctx context.Context) *Context {
+	if ctx == nil {
+		return nil
+	}
+	if v := ctx.Value(stateContextKey{}); v != nil {
+		if sctx, ok := v.(*Context); ok {
+			return sctx
+		}
+	}
+	return nil
+}
+
 // Context manages the execution scratchpad, immutable input, and branch liveness for a Circuit run.
 type Context struct {
 	Ctx           context.Context
@@ -138,6 +158,7 @@ func (c *Context) Snapshot() map[string]any {
 	res := make(map[string]any, len(c.scratchpad)+8)
 	// Base input if map
 	if m, isMap := c.OriginalInput.(map[string]any); isMap {
+		res["payload"] = m
 		for k, v := range m {
 			res[k] = v
 		}

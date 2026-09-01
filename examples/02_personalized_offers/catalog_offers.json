@@ -1,0 +1,50 @@
+[
+  {
+    "id": "offer_vip_diamond_lounge",
+    "tags": ["offers:gaming_vip"],
+    "data": {
+      "name": "Diamond VIP Pass",
+      "price": 99.99
+    },
+    "circuit": {
+      "id": "diamond_qualify",
+      "root": {
+        "name": "check_vip",
+        "condition": "user.level >= 50.0 && user.spend >= 1000.0",
+        "steps": [
+          {
+            "type": "return",
+            "data": {
+              "discount_pct": 0.30,
+              "exclusive_badge": "DIAMOND_ELITE"
+            }
+          }
+        ]
+      }
+    }
+  },
+  {
+    "id": "offer_gold_starter_pack",
+    "tags": ["offers:gaming_vip"],
+    "data": {
+      "name": "Gold Adventurer Pack",
+      "price": 19.99
+    },
+    "circuit": {
+      "id": "gold_qualify",
+      "root": {
+        "name": "check_gold",
+        "condition": "user.level >= 10.0",
+        "steps": [
+          {
+            "type": "return",
+            "data": {
+              "discount_pct": 0.15,
+              "exclusive_badge": "GOLD_MEMBER"
+            }
+          }
+        ]
+      }
+    }
+  }
+]

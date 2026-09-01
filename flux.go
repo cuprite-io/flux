@@ -135,6 +135,11 @@ func (e *Engine) Spark(ctx context.Context, payload any, tags ...string) (*types
 		if err != nil {
 			combinedResult.Passed = false
 			combinedResult.Errors = append(combinedResult.Errors, err)
+			if res != nil {
+				for k, v := range res.ReturnedData {
+					combinedResult.ReturnedData[k] = v
+				}
+			}
 			continue
 		}
 
@@ -180,7 +185,11 @@ func (e *Engine) Conduct(ctx context.Context, req *types.ConductRequest) (*types
 	entityState := make(map[string]any)
 	if req.EntityID != "" && e.cache != nil {
 		if raw, err := e.cache.Get(ctx, "entity:"+req.EntityID); err == nil && raw != "" {
-			_ = json.Unmarshal([]byte(raw), &entityState)
+			if errJSON := json.Unmarshal([]byte(raw), &entityState); errJSON != nil {
+				_ = e.cache.GetScan(ctx, "entity:"+req.EntityID, &entityState)
+			}
+		} else {
+			_ = e.cache.GetScan(ctx, "entity:"+req.EntityID, &entityState)
 		}
 	}
 	// Overlay request context

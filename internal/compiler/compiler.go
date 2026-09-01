@@ -35,15 +35,6 @@ func NewCompiler(cacheAccess CacheAccessor) (*Compiler, error) {
 		cel.Variable("velocity", cel.DoubleType),
 		cel.Variable("window", cel.MapType(cel.StringType, cel.AnyType)),
 		cel.Variable("cache", cel.MapType(cel.StringType, cel.AnyType)),
-		cel.Variable("ml", cel.MapType(cel.StringType, cel.AnyType)),
-		cel.Variable("mask", cel.MapType(cel.StringType, cel.AnyType)),
-		cel.Variable("crypto", cel.MapType(cel.StringType, cel.AnyType)),
-		cel.Variable("geo", cel.MapType(cel.StringType, cel.AnyType)),
-		cel.Variable("math", cel.MapType(cel.StringType, cel.AnyType)),
-		cel.Variable("list", cel.MapType(cel.StringType, cel.AnyType)),
-		cel.Variable("base64", cel.MapType(cel.StringType, cel.AnyType)),
-		cel.Variable("hex", cel.MapType(cel.StringType, cel.AnyType)),
-		cel.Variable("uuid", cel.MapType(cel.StringType, cel.AnyType)),
 		ext.Strings(),
 		ext.Math(),
 	)
@@ -56,16 +47,9 @@ func NewCompiler(cacheAccess CacheAccessor) (*Compiler, error) {
 		cel.Function("set",
 			cel.Overload("set_key_val", []*cel.Type{cel.StringType, cel.AnyType}, cel.BoolType,
 				cel.FunctionBinding(func(args ...ref.Val) ref.Val {
-					key, ok := args[0].(celtypes.String)
-					if !ok {
-						return celtypes.NewErr("set: key must be string")
-					}
-					_ = key
-					nativeVal, _ := args[1].ConvertToNative(reflect.TypeOf((*any)(nil)).Elem())
-					_ = nativeVal
-					// Note: State modifications are tracked in execution context
 					return celtypes.Bool(true)
-				})),
+				}),
+			),
 		),
 		cel.Function("get",
 			cel.Overload("get_key_fallback", []*cel.Type{cel.StringType, cel.AnyType}, cel.AnyType,
@@ -201,6 +185,16 @@ func NewCompiler(cacheAccess CacheAccessor) (*Compiler, error) {
 		// --- 4. Geo-Spatial ---
 		cel.Function("geo.dist_km",
 			cel.Overload("geo_dist_km_coords", []*cel.Type{cel.DoubleType, cel.DoubleType, cel.DoubleType, cel.DoubleType}, cel.DoubleType,
+				cel.FunctionBinding(func(args ...ref.Val) ref.Val {
+					lat1 := float64(args[0].(celtypes.Double))
+					lon1 := float64(args[1].(celtypes.Double))
+					lat2 := float64(args[2].(celtypes.Double))
+					lon2 := float64(args[3].(celtypes.Double))
+					return celtypes.Double(OpGeoDistanceKM(lat1, lon1, lat2, lon2))
+				})),
+		),
+		cel.Function("geo.distance_km",
+			cel.Overload("geo_distance_km_coords", []*cel.Type{cel.DoubleType, cel.DoubleType, cel.DoubleType, cel.DoubleType}, cel.DoubleType,
 				cel.FunctionBinding(func(args ...ref.Val) ref.Val {
 					lat1 := float64(args[0].(celtypes.Double))
 					lon1 := float64(args[1].(celtypes.Double))

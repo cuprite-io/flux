@@ -1,0 +1,39 @@
+{
+  "id": "tenant_rate_limiter",
+  "tags": ["stream:api_gateway"],
+  "root": {
+    "name": "check_rate_limit",
+    "children": [
+      {
+        "name": "allowed_branch",
+        "condition": "payload.requests_in_window <= 5.0",
+        "steps": [
+          {
+            "type": "return",
+            "data": {
+              "status": "200_OK",
+              "allowed": true
+            }
+          }
+        ]
+      },
+      {
+        "name": "exceeded_branch",
+        "condition": "payload.requests_in_window > 5.0",
+        "steps": [
+          {
+            "type": "return",
+            "data": {
+              "status": "429_TOO_MANY_REQUESTS",
+              "allowed": false,
+              "retry_after_ms": 1000.0
+            }
+          },
+          {
+            "type": "abort"
+          }
+        ]
+      }
+    ]
+  }
+}

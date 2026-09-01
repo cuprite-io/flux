@@ -7,6 +7,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.7.0] - 2026-09-01
+
+### Added
+- **Multi-Node Distributed Integration Test** (`integration_test.go`):
+  - Validates instantaneous state convergence and delta log replication across two independent Flux instances backed by separate Capacitor peer nodes without any direct inter-instance communication.
+- **Production Real-World Examples** (`examples/`):
+  - `01_fraud_detection`: Advanced fraud & impossible travel anomaly engine combining historical all-time max amounts, CRDT device sets, geo-spatial speed vectors, and multi-sink alerting (MFA + SOC Webhook + StepAbort).
+  - `02_personalized_offers`: Player VIP level evaluation, reward scaling, and silent omission of ineligibles.
+  - `03_gaming_boss_kill`: Parallel child branches for reward calculation and Discord webhook notifications.
+  - `04_dynamic_pricing`: Multi-candidate delivery qualification with cart thresholds and dynamic pricing.
+  - `05_distributed_rate_limiting`: High-throughput API gateway rate limiter using Capacitor sliding window counters.
+- **Direct GitHub Dependency**: Integrated `github.com/cuprite-io/capacitor@v0.26.8` directly from GitHub.
+- **Volt Engine Geo Aliasing**: Added `geo.distance_km` alias alongside `geo.dist_km`.
+
+### Changed
+- Preserved `ReturnedData` in `SparkResult` when `StepAbort` is triggered, ensuring self-contained caller responses (`internal/engine/executor.go`, `flux.go`).
+- Improved `state.Snapshot()` to expose top-level `payload` and state variables for direct CEL expressions (`internal/state/state.go`).
+- Prioritized JSON unmarshaling in entity state hydration (`Conduct`).
+
+---
+
 ## [0.6.0] - 2026-08-31
 
 ### Added

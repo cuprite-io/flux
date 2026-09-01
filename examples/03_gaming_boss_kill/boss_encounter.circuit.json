@@ -1,0 +1,40 @@
+{
+  "id": "boss_kill_pipeline",
+  "tags": ["stream:game_events"],
+  "root": {
+    "name": "verify_boss_kill",
+    "condition": "payload.damage >= 5000.0",
+    "steps": [
+      {
+        "type": "volt",
+        "script": "set('base_xp', payload.damage * 0.2) && set('gold_earned', 250.0)"
+      }
+    ],
+    "children": [
+      {
+        "name": "discord_announcement",
+        "condition": "payload.boss_type == 'RAID_BOSS'",
+        "steps": [
+          {
+            "type": "sink",
+            "sink": "discord_webhooks",
+            "payload": "Epic Raid Boss Defeated!"
+          }
+        ]
+      },
+      {
+        "name": "rewards_calculator",
+        "steps": [
+          {
+            "type": "return",
+            "data": {
+              "status": "VICTORY",
+              "awarded_xp": 1000.0,
+              "drop_item": "Legendary Titan Blade"
+            }
+          }
+        ]
+      }
+    ]
+  }
+}

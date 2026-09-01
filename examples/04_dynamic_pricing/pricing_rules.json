@@ -1,0 +1,49 @@
+[
+  {
+    "id": "delivery_drone_express",
+    "tags": ["pricing:delivery"],
+    "data": {
+      "mode": "DRONE",
+      "base_fee": 12.00
+    },
+    "circuit": {
+      "id": "drone_fee_calc",
+      "root": {
+        "name": "calc_drone_surge",
+        "condition": "user.cart_total >= 50.0",
+        "steps": [
+          {
+            "type": "return",
+            "data": {
+              "final_fee": 4.99,
+              "eta_minutes": 15
+            }
+          }
+        ]
+      }
+    }
+  },
+  {
+    "id": "delivery_ground_standard",
+    "tags": ["pricing:delivery"],
+    "data": {
+      "mode": "GROUND",
+      "base_fee": 5.00
+    },
+    "circuit": {
+      "id": "ground_fee_calc",
+      "root": {
+        "name": "calc_ground_fee",
+        "steps": [
+          {
+            "type": "return",
+            "data": {
+              "final_fee": 2.50,
+              "eta_minutes": 45
+            }
+          }
+        ]
+      }
+    }
+  }
+]
