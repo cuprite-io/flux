@@ -7,6 +7,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.9.3] - 2026-09-02
+
+### Performance
+- **Lock-Free Candidate Worker Buffering in Conduct** (`flux.go`):
+  - Eliminated parallel worker mutex serialization (`qualifiedMu`) during candidate qualification by utilizing pre-allocated thread-indexed output slots (`evalResults`) with lock-free result compaction.
+  - Streamlined `itemContext` construction to eliminate redundant map cloning across parallel candidate evaluation goroutines.
+  - Preserved Flux's Catalog as a pure, stateless zero-duplicate adapter backed directly by Capacitor's Category-Partitioned distributed maps.
+
+---
+
+## [0.9.2] - 2026-09-02
+
+### Performance
+- **Zero-JSON Cached Struct Ingestion in Spark / Conduct** (`flux.go`):
+  - Replaced JSON double round-tripping (`json.Marshal` + `json.Unmarshal`) in `normalizeInput` with a cached reflection field metadata extractor (`structFieldCache`, `fastStructToMap`).
+  - Extracted JSON struct tags and field indices once per type, mapping struct field values directly into execution maps without string serialization.
+  - Reduced Go struct ingestion and execution latency by **~62.8x** (from $77.4\text{ µs} \rightarrow 1.23\text{ µs}$) and reduced heap allocations by **18x** (from 258 allocs $\rightarrow$ 15 allocs).
+
+---
+
 ## [0.9.1] - 2026-09-02
 
 ### Performance

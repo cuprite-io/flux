@@ -199,10 +199,8 @@ func (e *Engine) Conduct(ctx context.Context, req *types.ConductRequest) (*types
 		entityState[k] = v
 	}
 
-	// 3. Parallel Candidate Item Qualification
-	var qualifiedMu sync.Mutex
-	qualified := make([]types.EvaluatedItem, 0, len(items))
-
+	// 3. Parallel Candidate Item Qualification (Lock-Free Thread Slots)
+	evalResults := make([]*types.EvaluatedItem, len(items))
 	latch := pool.NewLatch(len(items))
 
 	for i, it := range items {
@@ -215,20 +213,18 @@ func (e *Engine) Conduct(ctx context.Context, req *types.ConductRequest) (*types
 			// Check item embedded qualification circuit
 			if item.Circuit == nil {
 				// No qualification circuit -> automatically qualified with base data
-				qualifiedMu.Lock()
-				qualified = append(qualified, types.EvaluatedItem{
+				evalResults[rankIdx] = &types.EvaluatedItem{
 					ID:             item.ID,
 					Data:           item.Data,
 					ComputedOutput: item.Data,
 					Score:          1.0,
 					Rank:           rankIdx + 1,
-				})
-				qualifiedMu.Unlock()
+				}
 				return
 			}
 
 			// Evaluate embedded circuit against hydrated entity state
-			itemContext := make(map[string]any, len(entityState)+len(item.Data)+4)
+			itemContext := make(map[string]any, len(entityState)+len(item.Data)+2)
 			for k, v := range entityState {
 				itemContext[k] = v
 			}
@@ -252,21 +248,27 @@ func (e *Engine) Conduct(ctx context.Context, req *types.ConductRequest) (*types
 				computedOut = res.ReturnedData
 			}
 
-			qualifiedMu.Lock()
-			qualified = append(qualified, types.EvaluatedItem{
+			evalResults[rankIdx] = &types.EvaluatedItem{
 				ID:             item.ID,
 				Data:           item.Data,
 				ComputedOutput: computedOut,
 				Score:          1.0,
 				Rank:           0,
-			})
-			qualifiedMu.Unlock()
+			}
 		})
 	}
 
 	latch.Wait()
 
-	// 4. Sort and apply TopK limit
+	// 4. Compact qualified results lock-free
+	qualified := make([]types.EvaluatedItem, 0, len(items))
+	for _, res := range evalResults {
+		if res != nil {
+			qualified = append(qualified, *res)
+		}
+	}
+
+	// 5. Sort and apply TopK limit
 	sort.Slice(qualified, func(i, j int) bool {
 		return qualified[i].Score > qualified[j].Score
 	})
