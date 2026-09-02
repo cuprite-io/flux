@@ -49,6 +49,46 @@ type Context struct {
 	errors   []error
 }
 
+var contextPool = sync.Pool{
+	New: func() any {
+		return &Context{
+			scratchpad: make(map[string]any, 8),
+			deltas:     make(map[string]any, 4),
+		}
+	},
+}
+
+// AcquireContext retrieves a clean Context from the pool.
+func AcquireContext(ctx context.Context, input any) *Context {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	c := contextPool.Get().(*Context)
+	c.Ctx = ctx
+	c.OriginalInput = input
+	c.deadMask = 0
+	c.aborted = 0
+	c.errors = nil
+	c.returnData = nil
+	return c
+}
+
+// ReleaseContext clears and returns the Context to the pool.
+func ReleaseContext(c *Context) {
+	if c == nil {
+		return
+	}
+	c.Ctx = nil
+	c.OriginalInput = nil
+	c.returnData = nil
+	c.errors = nil
+	c.mu.Lock()
+	clear(c.scratchpad)
+	clear(c.deltas)
+	c.mu.Unlock()
+	contextPool.Put(c)
+}
+
 // NewContext creates a fresh execution Context for a Circuit run.
 func NewContext(ctx context.Context, input any) *Context {
 	if ctx == nil {

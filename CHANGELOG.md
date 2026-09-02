@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.9.6] - 2026-09-02
+
+### Performance
+- **StateContext Object Pooling via `sync.Pool`** (`internal/state/state.go`, `flux.go`):
+  - Implemented pre-warmed `contextPool sync.Pool` with `AcquireContext` and `ReleaseContext` for zero-allocation lifecycle recycling.
+  - Used Go 1.21+ builtin `clear()` to reset scratchpad and delta hash maps without releasing underlying bucket allocations back to the GC.
+  - Reduced Go struct `Spark()` heap memory per evaluation to **528 B/op** and **7 allocs/op** (down from **14,579 B/op and 269 allocs** initially).
+
+---
+
 ## [0.9.5] - 2026-09-02
 
 ### Performance

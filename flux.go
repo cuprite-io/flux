@@ -119,7 +119,8 @@ func (e *Engine) Spark(ctx context.Context, payload any, tags ...string) (*types
 
 	// Single-Circuit Fast Path (>95% production workload)
 	if len(circuits) == 1 {
-		sctx := state.NewContext(ctx, normalizedInput)
+		sctx := state.AcquireContext(ctx, normalizedInput)
+		defer state.ReleaseContext(sctx)
 		res, err := e.executor.ExecuteCircuit(ctx, circuits[0], sctx)
 		if res != nil {
 			res.OriginalInput = payload
@@ -148,8 +149,9 @@ func (e *Engine) Spark(ctx context.Context, payload any, tags ...string) (*types
 	// Execute matching Circuits sequentially
 	// Isolation rule: Every Circuit runs with the original immutable payload base
 	for _, circuit := range circuits {
-		sctx := state.NewContext(ctx, normalizedInput)
+		sctx := state.AcquireContext(ctx, normalizedInput)
 		res, err := e.executor.ExecuteCircuit(ctx, circuit, sctx)
+		state.ReleaseContext(sctx)
 
 		combinedResult.ExecutedCircuits = append(combinedResult.ExecutedCircuits, circuit.ID)
 
@@ -254,12 +256,13 @@ func (e *Engine) Conduct(ctx context.Context, req *types.ConductRequest) (*types
 			itemContext["user"] = entityState
 			itemContext["item"] = item.Data
 
-			sctx := state.NewContext(ctx, itemContext)
+			sctx := state.AcquireContext(ctx, itemContext)
 			res, err := e.executor.ExecuteCircuit(ctx, item.Circuit, sctx)
 
 			// Ineligible / aborted items are SILENTLY OMITTED
 			// If root node was pruned (condition failed) or execution aborted -> omit
 			if err != nil || !res.Passed || sctx.IsAborted() || sctx.IsPruned(1<<0) {
+				state.ReleaseContext(sctx)
 				return
 			}
 
@@ -267,6 +270,7 @@ func (e *Engine) Conduct(ctx context.Context, req *types.ConductRequest) (*types
 			if len(res.ReturnedData) > 0 {
 				computedOut = res.ReturnedData
 			}
+			state.ReleaseContext(sctx)
 
 			evalResults[rankIdx] = &types.EvaluatedItem{
 				ID:             item.ID,
