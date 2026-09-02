@@ -1,6 +1,7 @@
 package flux
 
 import (
+	"container/heap"
 	"context"
 	"encoding/json"
 	"errors"
@@ -292,25 +293,56 @@ func (e *Engine) Conduct(ctx context.Context, req *types.ConductRequest) (*types
 		}
 	}
 
-	// 5. Sort and apply TopK limit
-	sort.Slice(qualified, func(i, j int) bool {
-		return qualified[i].Score > qualified[j].Score
-	})
-
-	for i := range qualified {
-		qualified[i].Rank = i + 1
-	}
-
+	// 5. Apply Top-K ranking (Bounded Min-Heap for K < N, Full Sort for K >= N or TopK == 0)
+	var finalItems []types.EvaluatedItem
 	if req.TopK > 0 && len(qualified) > req.TopK {
-		qualified = qualified[:req.TopK]
+		h := &itemMinHeap{}
+		heap.Init(h)
+		for _, it := range qualified {
+			if h.Len() < req.TopK {
+				heap.Push(h, it)
+			} else if it.Score > (*h)[0].Score {
+				(*h)[0] = it
+				heap.Fix(h, 0)
+			}
+		}
+		finalItems = make([]types.EvaluatedItem, h.Len())
+		for i := len(finalItems) - 1; i >= 0; i-- {
+			finalItems[i] = heap.Pop(h).(types.EvaluatedItem)
+		}
+		for i := range finalItems {
+			finalItems[i].Rank = i + 1
+		}
+	} else {
+		sort.Slice(qualified, func(i, j int) bool {
+			return qualified[i].Score > qualified[j].Score
+		})
+		for i := range qualified {
+			qualified[i].Rank = i + 1
+		}
+		finalItems = qualified
 	}
 
 	return &types.ConductResult{
 		EntityID:       req.EntityID,
-		Items:          qualified,
+		Items:          finalItems,
 		EvaluatedCount: evaluatedCount,
 		Duration:       time.Since(startTime),
 	}, nil
+}
+
+type itemMinHeap []types.EvaluatedItem
+
+func (h itemMinHeap) Len() int           { return len(h) }
+func (h itemMinHeap) Less(i, j int) bool { return h[i].Score < h[j].Score }
+func (h itemMinHeap) Swap(i, j int)      { h[i], h[j] = h[j], h[i] }
+func (h *itemMinHeap) Push(x any)        { *h = append(*h, x.(types.EvaluatedItem)) }
+func (h *itemMinHeap) Pop() any {
+	old := *h
+	n := len(old)
+	x := old[n-1]
+	*h = old[0 : n-1]
+	return x
 }
 
 // normalizeInput converts Go structs, slices, or JSON to a map representation for Volt execution.

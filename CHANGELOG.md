@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.9.8] - 2026-09-02
+
+### Performance
+- **Bounded Min-Heap for Top-K Candidate Selection in Conduct** (`flux.go`):
+  - Implemented `itemMinHeap` using standard `container/heap` with `heap.Fix()` $O(N \log K)$ bounded pruning when $K < N$.
+  - Avoided $O(N \log N)$ full slice reflection sorting across discarded non-qualifying candidate items, accelerating candidate ranking in `Conduct()`.
+
+---
+
 ## [0.9.7] - 2026-09-02
 
 ### Performance
