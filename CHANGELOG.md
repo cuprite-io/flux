@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.9.4] - 2026-09-02
+
+### Performance
+- **AOT Script Desugaring & Pre-Compilation in Step Execution** (`internal/engine/executor.go`):
+  - Added thread-safe compiled script cache (`scriptCache`, `compiledVoltScript`) inside `Executor`.
+  - Desugared and compiled `set()` mutation statements and main expressions once, eliminating runtime string scanning, quote matching, parenthesis counting, and map lookups on the execution hot path.
+  - Executed pre-compiled expression pointers directly against zero-copy activation contexts.
+
+---
+
 ## [0.9.3] - 2026-09-02
 
 ### Performance

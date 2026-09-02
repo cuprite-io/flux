@@ -5,11 +5,13 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"sync"
 
 	"github.com/cuprite-io/flux/internal/compiler"
 	"github.com/cuprite-io/flux/internal/pool"
 	"github.com/cuprite-io/flux/internal/state"
 	"github.com/cuprite-io/flux/types"
+	"github.com/google/cel-go/cel"
 )
 
 var (
@@ -19,11 +21,22 @@ var (
 // SinkDispatcher defines the callback function to dispatch payloads to external sinks.
 type SinkDispatcher func(sinkName string, payload any) error
 
+type setCompiledStmt struct {
+	key  string
+	prog cel.Program
+}
+
+type compiledVoltScript struct {
+	setStatements []setCompiledStmt
+	mainProg      cel.Program
+}
+
 // Executor coordinates the execution of Circuit trees.
 type Executor struct {
-	compiler   *compiler.Compiler
-	workerPool *pool.WorkerPool
-	sinkFn     SinkDispatcher
+	compiler    *compiler.Compiler
+	workerPool  *pool.WorkerPool
+	sinkFn      SinkDispatcher
+	scriptCache sync.Map // string -> *compiledVoltScript
 }
 
 // NewExecutor creates a new Circuit tree Executor.
@@ -149,6 +162,36 @@ func (e *Executor) executeNode(ctx context.Context, node *types.Node, sctx *stat
 	}
 }
 
+func (e *Executor) getOrCompileScript(script string) (*compiledVoltScript, error) {
+	if v, ok := e.scriptCache.Load(script); ok {
+		return v.(*compiledVoltScript), nil
+	}
+
+	compiled := &compiledVoltScript{}
+	setStatements := extractSetStatements(script)
+	if len(setStatements) > 0 {
+		for _, stmt := range setStatements {
+			p, err := e.compiler.Compile(stmt.expr)
+			if err != nil {
+				return nil, err
+			}
+			compiled.setStatements = append(compiled.setStatements, setCompiledStmt{
+				key:  stmt.key,
+				prog: p,
+			})
+		}
+	} else {
+		p, err := e.compiler.Compile(script)
+		if err != nil {
+			return nil, err
+		}
+		compiled.mainProg = p
+	}
+
+	actual, _ := e.scriptCache.LoadOrStore(script, compiled)
+	return actual.(*compiledVoltScript), nil
+}
+
 // executeStep executes a single StepDefinition within a node.
 func (e *Executor) executeStep(ctx context.Context, step *types.StepDefinition, sctx *state.Context) error {
 	switch step.Type {
@@ -156,27 +199,26 @@ func (e *Executor) executeStep(ctx context.Context, step *types.StepDefinition, 
 		if step.Script == "" {
 			return nil
 		}
-		// Parse and evaluate set() assignments if present
-		setStatements := extractSetStatements(step.Script)
-		if len(setStatements) > 0 {
-			for _, stmt := range setStatements {
-				prog, err := e.compiler.Compile(stmt.expr)
-				if err == nil {
-					out, _, errEval := prog.Eval(sctx)
-					if errEval == nil && out != nil {
-						sctx.Set(stmt.key, out.Value())
-					}
+		compiled, err := e.getOrCompileScript(step.Script)
+		if err != nil {
+			return err
+		}
+
+		if len(compiled.setStatements) > 0 {
+			for _, stmt := range compiled.setStatements {
+				out, _, errEval := stmt.prog.Eval(sctx)
+				if errEval == nil && out != nil {
+					sctx.Set(stmt.key, out.Value())
 				}
 			}
 			return nil
 		}
 
-		prog, err := e.compiler.Compile(step.Script)
-		if err != nil {
+		if compiled.mainProg != nil {
+			_, _, err = compiled.mainProg.Eval(sctx)
 			return err
 		}
-		_, _, err = prog.Eval(sctx)
-		return err
+		return nil
 
 	case types.StepSink:
 		if step.Condition != "" {
