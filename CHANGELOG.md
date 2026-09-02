@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.9.5] - 2026-09-02
+
+### Performance
+- **Single-Circuit Fast Path & Lean Context Sizing** (`flux.go`, `internal/state/state.go`):
+  - Added single-circuit direct return fast-path in `Spark()`, bypassing multi-circuit result aggregation, slice allocations, and map copy loops for single-circuit invocations.
+  - Sized initial `state.Context` scratchpad and delta map capacities to lean defaults (4 and 2), reducing per-context heap allocation footprint by **~64%** ($2,072\text{ B} \rightarrow 752\text{ B}$).
+
+---
+
 ## [0.9.4] - 2026-09-02
 
 ### Performance

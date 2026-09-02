@@ -57,8 +57,8 @@ func NewContext(ctx context.Context, input any) *Context {
 	return &Context{
 		Ctx:           ctx,
 		OriginalInput: input,
-		scratchpad:    make(map[string]any, 16),
-		deltas:        make(map[string]any, 8),
+		scratchpad:    make(map[string]any, 4),
+		deltas:        make(map[string]any, 2),
 		returnData:    nil,
 		deadMask:      0,
 		aborted:       0,

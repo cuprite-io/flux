@@ -117,6 +117,26 @@ func (e *Engine) Spark(ctx context.Context, payload any, tags ...string) (*types
 
 	normalizedInput := normalizeInput(payload)
 
+	// Single-Circuit Fast Path (>95% production workload)
+	if len(circuits) == 1 {
+		sctx := state.NewContext(ctx, normalizedInput)
+		res, err := e.executor.ExecuteCircuit(ctx, circuits[0], sctx)
+		if res != nil {
+			res.OriginalInput = payload
+			if res.ReturnedData == nil {
+				res.ReturnedData = make(map[string]any)
+			}
+			return res, err
+		}
+		return &types.SparkResult{
+			OriginalInput:    payload,
+			ReturnedData:     make(map[string]any),
+			Passed:           err == nil,
+			ExecutedCircuits: []string{circuits[0].ID},
+			Errors:           []error{err},
+		}, err
+	}
+
 	combinedResult := &types.SparkResult{
 		OriginalInput:    payload,
 		ReturnedData:     make(map[string]any),
