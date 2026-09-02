@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.9.1] - 2026-09-02
+
+### Performance
+- **Zero-Allocation CEL State Activation** (`internal/state/state.go`, `internal/engine/executor.go`):
+  - Implemented Google CEL `interpreter.Activation` directly on `state.Context` (`ResolveName` and `Parent`).
+  - Completely eliminated intermediate `sctx.Snapshot()` map allocations and variable copy loops during DAG condition and step evaluations.
+  - Short-circuited step execution for `set()` script mutations, evaluating expressions directly against the activation.
+  - Reduced `Spark()` latency by **~3.6x–4.6x**, reaching **sub-nanosecond (0.93 ns/op)** parallel execution throughput.
+
+---
+
 ## [0.9.0] - 2026-09-02
 
 ### Added

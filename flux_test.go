@@ -135,9 +135,9 @@ func TestFlux_ConductEndToEnd(t *testing.T) {
 		}))
 
 	item1 := &types.Item{
-		ID:   "offer_titan",
-		Tags: []string{"offers:boss_killer"},
-		Data: map[string]any{"name": "Titan Bundle"},
+		ID:      "offer_titan",
+		Tags:    []string{"offers:boss_killer"},
+		Data:    map[string]any{"name": "Titan Bundle"},
 		Circuit: types.NewCircuit("titan_circuit").WithRoot(root1),
 	}
 
@@ -150,9 +150,9 @@ func TestFlux_ConductEndToEnd(t *testing.T) {
 		}))
 
 	item2 := &types.Item{
-		ID:   "offer_starter",
-		Tags: []string{"offers:boss_killer"},
-		Data: map[string]any{"name": "Starter Pack"},
+		ID:      "offer_starter",
+		Tags:    []string{"offers:boss_killer"},
+		Data:    map[string]any{"name": "Starter Pack"},
 		Circuit: types.NewCircuit("starter_circuit").WithRoot(root2),
 	}
 
@@ -238,10 +238,9 @@ func BenchmarkFlux_Spark(b *testing.B) {
 	evt := PaymentEvent{UserID: "u1", Amount: 500.0}
 	ctx := context.Background()
 
-	b.ResetTimer()
 	b.ReportAllocs()
 
-	for i := 0; i < b.N; i++ {
+	for b.Loop() {
 		_, _ = eng.Spark(ctx, evt, "stream:bench")
 	}
 }

@@ -158,23 +158,24 @@ func (e *Executor) executeStep(ctx context.Context, step *types.StepDefinition, 
 		}
 		// Parse and evaluate set() assignments if present
 		setStatements := extractSetStatements(step.Script)
-		for _, stmt := range setStatements {
-			prog, err := e.compiler.Compile(stmt.expr)
-			if err == nil {
-				snapshot := sctx.Snapshot()
-				out, _, errEval := prog.Eval(snapshot)
-				if errEval == nil && out != nil {
-					sctx.Set(stmt.key, out.Value())
+		if len(setStatements) > 0 {
+			for _, stmt := range setStatements {
+				prog, err := e.compiler.Compile(stmt.expr)
+				if err == nil {
+					out, _, errEval := prog.Eval(sctx)
+					if errEval == nil && out != nil {
+						sctx.Set(stmt.key, out.Value())
+					}
 				}
 			}
+			return nil
 		}
 
 		prog, err := e.compiler.Compile(step.Script)
 		if err != nil {
 			return err
 		}
-		snapshot := sctx.Snapshot()
-		_, _, err = prog.Eval(snapshot)
+		_, _, err = prog.Eval(sctx)
 		return err
 
 	case types.StepSink:
@@ -223,8 +224,7 @@ func (e *Executor) evalCondition(ctx context.Context, expr string, sctx *state.C
 	if err != nil {
 		return false, err
 	}
-	snapshot := sctx.Snapshot()
-	out, _, err := prog.Eval(snapshot)
+	out, _, err := prog.Eval(sctx)
 	if err != nil {
 		return false, err
 	}

@@ -92,10 +92,9 @@ func BenchmarkFBWF_Decode(b *testing.B) {
 	prog := vm.NewProgram("bench_prog", steps, nil, []byte("benchmark_constants"), nil)
 	encoded := registry.EncodeFBWF(prog)
 
-	b.ResetTimer()
 	b.ReportAllocs()
 
-	for i := 0; i < b.N; i++ {
+	for b.Loop() {
 		_, err := registry.DecodeFBWF("bench_prog", encoded)
 		if err != nil {
 			b.Fatal(err)

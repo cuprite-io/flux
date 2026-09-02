@@ -7,6 +7,7 @@ import (
 
 	"github.com/cuprite-io/flux/internal/vm"
 	"github.com/cuprite-io/flux/types"
+	"github.com/google/cel-go/interpreter"
 )
 
 type stateContextKey struct{}
@@ -148,6 +149,36 @@ func (c *Context) Set(key string, val any) {
 	c.scratchpad[key] = val
 	c.deltas[key] = val
 	c.mu.Unlock()
+}
+
+// ResolveName implements interpreter.Activation for zero-allocation CEL expression evaluation.
+func (c *Context) ResolveName(name string) (any, bool) {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+
+	// 1. Check scratchpad (highest priority for mutated variables)
+	if v, ok := c.scratchpad[name]; ok {
+		return v, true
+	}
+
+	// 2. Check "payload" specifically
+	if name == "payload" {
+		return c.OriginalInput, true
+	}
+
+	// 3. Check fields in OriginalInput if it's a map
+	if m, isMap := c.OriginalInput.(map[string]any); isMap {
+		if v, ok := m[name]; ok {
+			return v, true
+		}
+	}
+
+	return nil, false
+}
+
+// Parent implements interpreter.Activation.
+func (c *Context) Parent() interpreter.Activation {
+	return nil
 }
 
 // Snapshot returns a copy of the entire current scratchpad.
