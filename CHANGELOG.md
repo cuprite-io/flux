@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.9.7] - 2026-09-02
+
+### Performance
+- **Zero-Allocation Tag Query Routing in Registry** (`internal/registry/registry.go`):
+  - Pre-resolved Circuit pointer slices (`tagCircuits map[string][]*types.Circuit`) in `RegistrySnapshot` during `Put()` / `Delete()` copy-on-write hot swaps.
+  - Implemented instant $O(1)$ single-tag fast-path in `GetMatching()` that returns pre-indexed Circuit pointer slices directly with 0 intermediate map allocations or ID lookup loops.
+
+---
+
 ## [0.9.6] - 2026-09-02
 
 ### Performance

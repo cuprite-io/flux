@@ -15,7 +15,7 @@ import (
 )
 
 var (
-	ErrCircuitNotFound  = errors.New("flux registry: circuit not found")
+	ErrCircuitNotFound   = errors.New("flux registry: circuit not found")
 	ErrCorruptFBWFHeader = errors.New("flux registry: invalid or corrupt FBWF binary header")
 	ErrChecksumMismatch  = errors.New("flux registry: FBWF CRC64 checksum mismatch")
 )
@@ -33,14 +33,14 @@ var crcTable = crc64.MakeTable(crc64.ECMA)
 
 // FBWFHeader represents the 32-byte fixed binary header of a compiled Circuit.
 type FBWFHeader struct {
-	Magic            uint32  // 4 B: 0x464C5558 ('FLUX')
-	Version          uint16  // 2 B: Wire format version
-	Flags            uint16  // 2 B: Compression / encoding flags
-	StepCount        uint32  // 4 B: Number of contiguous 64-byte Steps
-	ConstPoolLen     uint32  // 4 B: Byte length of constant string arena pool
-	StringTableCount uint32  // 4 B: Count of string entries
-	Reserved         uint32  // 4 B: Future expansion padding
-	CRC64Checksum    uint64  // 8 B: ECMA-182 polynomial checksum
+	Magic            uint32 // 4 B: 0x464C5558 ('FLUX')
+	Version          uint16 // 2 B: Wire format version
+	Flags            uint16 // 2 B: Compression / encoding flags
+	StepCount        uint32 // 4 B: Number of contiguous 64-byte Steps
+	ConstPoolLen     uint32 // 4 B: Byte length of constant string arena pool
+	StringTableCount uint32 // 4 B: Count of string entries
+	Reserved         uint32 // 4 B: Future expansion padding
+	CRC64Checksum    uint64 // 8 B: ECMA-182 polynomial checksum
 }
 
 // Static compile-time assertion: FBWFHeader must be exactly 32 bytes.
@@ -135,8 +135,8 @@ func DecodeFBWF(id string, data []byte) (*vm.Program, error) {
 
 // RegistrySnapshot represents an immutable point-in-time snapshot of registered Circuits.
 type RegistrySnapshot struct {
-	circuits map[string]*types.Circuit
-	tagIndex map[string][]string // tag -> []circuitID
+	circuits    map[string]*types.Circuit
+	tagCircuits map[string][]*types.Circuit // tag -> []*types.Circuit (pre-resolved pointers for 0-allocation matching)
 }
 
 // Registry manages standalone Circuit storage, tag indexing, and atomic hot-swapping.
@@ -152,8 +152,8 @@ func New(backend cache.CacheBackend) *Registry {
 		cacheBackend: backend,
 	}
 	r.current.Store(&RegistrySnapshot{
-		circuits: make(map[string]*types.Circuit),
-		tagIndex: make(map[string][]string),
+		circuits:    make(map[string]*types.Circuit),
+		tagCircuits: make(map[string][]*types.Circuit),
 	})
 	return r
 }
@@ -176,18 +176,18 @@ func (r *Registry) Put(ctx context.Context, circuit *types.Circuit) error {
 	}
 	newCircuits[circuit.ID] = circuit
 
-	// Rebuild tag index
-	newTagIndex := make(map[string][]string)
-	for id, c := range newCircuits {
+	// Rebuild tag index with pre-resolved circuit pointers
+	newTagCircuits := make(map[string][]*types.Circuit)
+	for _, c := range newCircuits {
 		for _, tag := range c.Tags {
-			newTagIndex[tag] = append(newTagIndex[tag], id)
+			newTagCircuits[tag] = append(newTagCircuits[tag], c)
 		}
 	}
 
 	// Atomically hot-swap the pointer (Spark execution threads see new state with 0 locks)
 	r.current.Store(&RegistrySnapshot{
-		circuits: newCircuits,
-		tagIndex: newTagIndex,
+		circuits:    newCircuits,
+		tagCircuits: newTagCircuits,
 	})
 
 	// Optionally persist to CacheBackend if present
@@ -215,25 +215,29 @@ func (r *Registry) GetMatching(ctx context.Context, tags ...string) []*types.Cir
 	}
 
 	snap := r.current.Load()
-	matchedIDs := make(map[string]struct{})
 
+	// Fast path for single tag query
+	if len(tags) == 1 {
+		return snap.tagCircuits[tags[0]]
+	}
+
+	// Multi-tag query with deduplication
+	matched := make(map[string]*types.Circuit)
 	for _, tag := range tags {
-		if ids, ok := snap.tagIndex[tag]; ok {
-			for _, id := range ids {
-				matchedIDs[id] = struct{}{}
+		if list, ok := snap.tagCircuits[tag]; ok {
+			for _, c := range list {
+				matched[c.ID] = c
 			}
 		}
 	}
 
-	if len(matchedIDs) == 0 {
+	if len(matched) == 0 {
 		return nil
 	}
 
-	res := make([]*types.Circuit, 0, len(matchedIDs))
-	for id := range matchedIDs {
-		if c, ok := snap.circuits[id]; ok {
-			res = append(res, c)
-		}
+	res := make([]*types.Circuit, 0, len(matched))
+	for _, c := range matched {
+		res = append(res, c)
 	}
 	return res
 }
@@ -255,16 +259,16 @@ func (r *Registry) Delete(ctx context.Context, id string) error {
 		}
 	}
 
-	newTagIndex := make(map[string][]string)
-	for cID, c := range newCircuits {
+	newTagCircuits := make(map[string][]*types.Circuit)
+	for _, c := range newCircuits {
 		for _, tag := range c.Tags {
-			newTagIndex[tag] = append(newTagIndex[tag], cID)
+			newTagCircuits[tag] = append(newTagCircuits[tag], c)
 		}
 	}
 
 	r.current.Store(&RegistrySnapshot{
-		circuits: newCircuits,
-		tagIndex: newTagIndex,
+		circuits:    newCircuits,
+		tagCircuits: newTagCircuits,
 	})
 
 	if r.cacheBackend != nil {
