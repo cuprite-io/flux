@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"reflect"
 	"sort"
+	"strings"
 	"sync"
 	"time"
 
@@ -287,6 +288,67 @@ func (e *Engine) Conduct(ctx context.Context, req *types.ConductRequest) (*types
 }
 
 // normalizeInput converts Go structs, slices, or JSON to a map representation for Volt execution.
+type structFieldInfo struct {
+	key   string
+	index int
+}
+
+var structFieldCache sync.Map // reflect.Type -> []structFieldInfo
+
+func getStructFields(t reflect.Type) []structFieldInfo {
+	if t.Kind() == reflect.Ptr {
+		t = t.Elem()
+	}
+	if v, ok := structFieldCache.Load(t); ok {
+		return v.([]structFieldInfo)
+	}
+
+	var fields []structFieldInfo
+	for i := 0; i < t.NumField(); i++ {
+		f := t.Field(i)
+		if !f.IsExported() {
+			continue
+		}
+		key := f.Name
+		tag := f.Tag.Get("json")
+		if tag != "" {
+			parts := strings.Split(tag, ",")
+			if parts[0] == "-" {
+				continue
+			}
+			if parts[0] != "" {
+				key = parts[0]
+			}
+		}
+		fields = append(fields, structFieldInfo{
+			key:   key,
+			index: i,
+		})
+	}
+
+	structFieldCache.Store(t, fields)
+	return fields
+}
+
+func fastStructToMap(val reflect.Value) map[string]any {
+	if val.Kind() == reflect.Ptr {
+		if val.IsNil() {
+			return nil
+		}
+		val = val.Elem()
+	}
+	if val.Kind() != reflect.Struct {
+		return nil
+	}
+
+	fields := getStructFields(val.Type())
+	m := make(map[string]any, len(fields))
+	for _, f := range fields {
+		m[f.key] = val.Field(f.index).Interface()
+	}
+	return m
+}
+
 func normalizeInput(payload any) any {
 	if payload == nil {
 		return nil
@@ -305,20 +367,21 @@ func normalizeInput(payload any) any {
 			return m
 		}
 		return v
+	case map[string]any:
+		return v
 	}
 
 	val := reflect.ValueOf(payload)
 	if val.Kind() == reflect.Ptr {
+		if val.IsNil() {
+			return nil
+		}
 		val = val.Elem()
 	}
 
 	if val.Kind() == reflect.Struct {
-		b, err := json.Marshal(payload)
-		if err == nil {
-			var m map[string]any
-			if err := json.Unmarshal(b, &m); err == nil {
-				return m
-			}
+		if m := fastStructToMap(val); m != nil {
+			return m
 		}
 	}
 

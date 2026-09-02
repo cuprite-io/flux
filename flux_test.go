@@ -229,7 +229,7 @@ func BenchmarkFlux_Spark(b *testing.B) {
 	defer eng.Close()
 
 	root := types.NewNode("bench_node").
-		Step(flux.Volt(`amount >= 100.0`))
+		Step(flux.Volt(`payload.amount >= 100.0`))
 	circuit := types.NewCircuit("bench_circuit").
 		WithTags("stream:bench").
 		WithRoot(root)
