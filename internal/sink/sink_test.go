@@ -35,4 +35,19 @@ func TestSinkRegistry_DispatchAndAsyncPipeline(t *testing.T) {
 	if atomic.LoadInt64(&counter) != 50 {
 		t.Errorf("expected 50 emitted events, got %d", counter)
 	}
+
+	// Synchronous Dispatch
+	err := reg.DispatchSync(context.Background(), "kafka_alerts", map[string]any{"sync": true})
+	if err != nil {
+		t.Fatalf("dispatch sync failed: %v", err)
+	}
+	if atomic.LoadInt64(&counter) != 51 {
+		t.Errorf("expected 51 emitted events after sync dispatch, got %d", counter)
+	}
+
+	// Unknown sink error
+	err = reg.DispatchSync(context.Background(), "non_existent_sink", map[string]any{})
+	if err == nil {
+		t.Errorf("expected error for non existent sink, got nil")
+	}
 }

@@ -263,6 +263,12 @@ func NewCompiler(cacheAccess CacheAccessor) (*Compiler, error) {
 					return celtypes.String(OpUUID())
 				})),
 		),
+		cel.Function("uuid.v4",
+			cel.Overload("uuid_v4_gen", []*cel.Type{}, cel.StringType,
+				cel.FunctionBinding(func(args ...ref.Val) ref.Val {
+					return celtypes.String(OpUUID())
+				})),
+		),
 		cel.Function("base64.encode",
 			cel.Overload("b64_enc", []*cel.Type{cel.StringType}, cel.StringType,
 				cel.FunctionBinding(func(args ...ref.Val) ref.Val {

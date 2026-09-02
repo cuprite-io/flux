@@ -1,7 +1,10 @@
 package compiler_test
 
 import (
+	"context"
+	"fmt"
 	"testing"
+	"time"
 
 	"github.com/cuprite-io/flux/internal/compiler"
 	"github.com/cuprite-io/flux/internal/vm"
@@ -50,8 +53,38 @@ func TestCompiler_VoltExpressions(t *testing.T) {
 			expected: compiler.OpSha256("flux"),
 		},
 		{
+			name:     "Crypto Hashing (SHA512)",
+			expr:     `crypto.sha512("flux")`,
+			input:    map[string]any{},
+			expected: compiler.OpSha512("flux"),
+		},
+		{
+			name:     "Crypto Hashing (MD5)",
+			expr:     `crypto.md5("flux")`,
+			input:    map[string]any{},
+			expected: compiler.OpMd5("flux"),
+		},
+		{
+			name:     "Crypto HMAC",
+			expr:     `crypto.hmac("data", "secret")`,
+			input:    map[string]any{},
+			expected: compiler.OpHmac("data", "secret"),
+		},
+		{
+			name:     "Crypto Encrypt / Decrypt",
+			expr:     `crypto.decrypt(crypto.encrypt("secret_payload", "my_passphrase"), "my_passphrase")`,
+			input:    map[string]any{},
+			expected: "secret_payload",
+		},
+		{
 			name:     "Geo Distance KM",
 			expr:     `geo.dist_km(37.7749, -122.4194, 34.0522, -118.2437) > 500.0`,
+			input:    map[string]any{},
+			expected: true,
+		},
+		{
+			name:     "Geo Distance Meters",
+			expr:     `geo.dist_m(37.7749, -122.4194, 34.0522, -118.2437) > 500000.0`,
 			input:    map[string]any{},
 			expected: true,
 		},
@@ -72,6 +105,18 @@ func TestCompiler_VoltExpressions(t *testing.T) {
 			expr:     `base64.decode(base64.encode("hello flux"))`,
 			input:    map[string]any{},
 			expected: "hello flux",
+		},
+		{
+			name:     "Hex Encode/Decode",
+			expr:     `hex.decode(hex.encode("flux_hex_test"))`,
+			input:    map[string]any{},
+			expected: "flux_hex_test",
+		},
+		{
+			name:     "UUID v4 Generation",
+			expr:     `size(uuid.v4()) == 36`,
+			input:    map[string]any{},
+			expected: true,
 		},
 		{
 			name:     "ML Scoring",
@@ -130,6 +175,54 @@ func TestVerifier_ValidAndInvalidPrograms(t *testing.T) {
 	invalidJumpProg := vm.NewProgram("invalid_jump", invalidJump, nil, nil, nil)
 	if err := v.Verify(invalidJumpProg); err == nil {
 		t.Errorf("expected jump offset out-of-bounds error, got nil")
+	}
+}
+
+type mockCacheAccessor struct {
+	store map[string]string
+}
+
+func (m *mockCacheAccessor) Get(ctx context.Context, key string) (string, error) {
+	if v, ok := m.store[key]; ok {
+		return v, nil
+	}
+	return "", nil
+}
+
+func (m *mockCacheAccessor) Set(ctx context.Context, key string, val any, ttl time.Duration) error {
+	m.store[key] = fmt.Sprintf("%v", val)
+	return nil
+}
+
+func (m *mockCacheAccessor) IncrementSlidingWindow(ctx context.Context, key string, window time.Duration) (int64, error) {
+	return 42, nil
+}
+
+func TestCompiler_CacheAndWindowOperators(t *testing.T) {
+	mockCache := &mockCacheAccessor{store: map[string]string{"user:101:status": "ACTIVE"}}
+	comp, err := compiler.NewCompiler(mockCache)
+	if err != nil {
+		t.Fatalf("failed to create compiler: %v", err)
+	}
+
+	// 1. Test cache.get
+	prog1, err := comp.Compile(`cache.get("user:101:status") == "ACTIVE"`)
+	if err != nil {
+		t.Fatalf("failed to compile: %v", err)
+	}
+	out1, _, err := prog1.Eval(map[string]any{})
+	if err != nil || out1.Value() != true {
+		t.Fatalf("expected true from cache.get, got: %v (err: %v)", out1.Value(), err)
+	}
+
+	// 2. Test window.count
+	prog2, err := comp.Compile(`window.count("ip:127.0.0.1", "60s") == 42`)
+	if err != nil {
+		t.Fatalf("failed to compile: %v", err)
+	}
+	out2, _, err := prog2.Eval(map[string]any{})
+	if err != nil || out2.Value() != true {
+		t.Fatalf("expected true from window.count, got: %v (err: %v)", out2.Value(), err)
 	}
 }
 

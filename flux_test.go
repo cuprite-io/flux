@@ -187,6 +187,43 @@ func TestFlux_ConductEndToEnd(t *testing.T) {
 	}
 }
 
+func TestFlux_OptionsAndCustomSink(t *testing.T) {
+	var sinkFired int64
+	customSink := sink.FuncSink(func(ctx context.Context, payload any) error {
+		atomic.AddInt64(&sinkFired, 1)
+		return nil
+	})
+
+	eng, err := flux.New(
+		flux.WithWorkers(2),
+		flux.WithSink("custom_sink", customSink),
+	)
+	if err != nil {
+		t.Fatalf("failed to initialize engine with options: %v", err)
+	}
+	defer eng.Close()
+
+	root := types.NewNode("sink_node").
+		Step(flux.Sink("custom_sink", "test_payload")).
+		Step(flux.Return(map[string]any{"ok": true}))
+
+	circuit := types.NewCircuit("custom_sink_circuit").
+		WithTags("stream:custom_sink").
+		WithRoot(root)
+
+	_ = eng.Registry().Put(context.Background(), circuit)
+
+	res, err := eng.Spark(context.Background(), struct{ Trigger bool }{Trigger: true}, "stream:custom_sink")
+	if err != nil || !res.Passed {
+		t.Fatalf("spark failed: %v", err)
+	}
+
+	time.Sleep(30 * time.Millisecond)
+	if atomic.LoadInt64(&sinkFired) != 1 {
+		t.Errorf("expected 1 custom sink dispatch, got %d", sinkFired)
+	}
+}
+
 func BenchmarkFlux_Spark(b *testing.B) {
 	eng, _ := flux.New()
 	defer eng.Close()

@@ -64,6 +64,16 @@ func TestRegistry_HotSwappingAndTags(t *testing.T) {
 		t.Errorf("expected circuit c3 for payments:asia")
 	}
 
+	circuitC2, err := reg.Get(context.Background(), "c2")
+	if err != nil || circuitC2 == nil || circuitC2.ID != "c2" {
+		t.Fatalf("expected to get c2, got err: %v", err)
+	}
+
+	_, err = reg.Get(context.Background(), "non_existent")
+	if err == nil {
+		t.Errorf("expected error for non existent circuit, got nil")
+	}
+
 	// Hot-swap delete c1
 	_ = reg.Delete(context.Background(), "c1")
 	goldAfterDelete := reg.GetMatching(context.Background(), "tier:gold")

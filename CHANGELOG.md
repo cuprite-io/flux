@@ -7,6 +7,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.9.0] - 2026-09-02
+
+### Added
+- **Top-Level Engine Benchmark Suite** (`flux_bench_test.go`):
+  - Standard Go benchmarks for `Spark` (Simple vs Advanced DAGs) and `Conduct` candidate item scoring.
+- **Full VoltScript Operator Benchmark Suite** (`internal/compiler/compiler_bench_test.go`):
+  - Benchmarks profiling every individual operator across State, Masking, Cryptography, Geo-Spatial, Math, Encodings, ML Inference, and live Capacitor cache lookups / sliding windows.
+- **Comprehensive Unit Test Hardening**:
+  - `types/types_test.go`: Node/Circuit builders, category fallbacks, step type string representations, and state context creation.
+  - `internal/vm/value_test.go`: Tagged `Value` scalars, views, `FrameArena` allocators, and `Program` CRC64 verification.
+  - `internal/compiler/compiler_test.go`: Full coverage for all standard library operators and stateful cache mocking.
+  - `internal/sink/sink_test.go`: Synchronous dispatch (`DispatchSync`) and error handling.
+  - `internal/registry/registry_test.go`: Direct circuit retrieval (`Get`) and error handling.
+  - `flux_test.go`: Option builders (`WithSink`, `WithWorkers`) and custom sink dispatch.
+- **UUID Function Alias** (`internal/compiler/compiler.go`):
+  - Added `uuid.v4()` function overload alias alongside `uuid()`.
+
+---
+
 ## [0.8.1] - 2026-09-02
 
 ### Documentation
