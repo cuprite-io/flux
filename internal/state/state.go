@@ -2,6 +2,8 @@ package state
 
 import (
 	"context"
+	"reflect"
+	"strings"
 	"sync"
 	"sync/atomic"
 
@@ -9,6 +11,36 @@ import (
 	"github.com/cuprite-io/flux/types"
 	"github.com/google/cel-go/interpreter"
 )
+
+var structTypeCache sync.Map // reflect.Type -> map[string]int
+
+func getStructFieldIndexes(t reflect.Type) map[string]int {
+	if t.Kind() == reflect.Ptr {
+		t = t.Elem()
+	}
+	if v, ok := structTypeCache.Load(t); ok {
+		return v.(map[string]int)
+	}
+
+	m := make(map[string]int, t.NumField())
+	for i := 0; i < t.NumField(); i++ {
+		f := t.Field(i)
+		if !f.IsExported() {
+			continue
+		}
+		key := f.Name
+		m[key] = i
+		tag := f.Tag.Get("json")
+		if tag != "" {
+			parts := strings.Split(tag, ",")
+			if parts[0] != "-" && parts[0] != "" {
+				m[parts[0]] = i
+			}
+		}
+	}
+	structTypeCache.Store(t, m)
+	return m
+}
 
 type stateContextKey struct{}
 
@@ -185,7 +217,7 @@ func (c *Context) MergeChild(child *Context) {
 	child.errorsMu.Unlock()
 }
 
-// Get retrieves a variable from Scratchpad or OriginalInput/SecondaryInput map.
+// Get retrieves a variable from Scratchpad, SecondaryInput, or OriginalInput map/struct.
 func (c *Context) Get(key string) (any, bool) {
 	c.mu.RLock()
 	val, ok := c.scratchpad[key]
@@ -205,6 +237,23 @@ func (c *Context) Get(key string) (any, bool) {
 		val, ok = m[key]
 		return val, ok
 	}
+
+	// Check if OriginalInput is a struct or pointer to struct
+	if c.OriginalInput != nil {
+		v := reflect.ValueOf(c.OriginalInput)
+		if v.Kind() == reflect.Ptr {
+			if !v.IsNil() {
+				v = v.Elem()
+			}
+		}
+		if v.Kind() == reflect.Struct {
+			fields := getStructFieldIndexes(v.Type())
+			if idx, found := fields[key]; found {
+				return v.Field(idx).Interface(), true
+			}
+		}
+	}
+
 	return nil, false
 }
 
@@ -246,6 +295,23 @@ func (c *Context) ResolveName(name string) (any, bool) {
 		if v, ok := m[name]; ok {
 			return v, true
 		}
+		return nil, false
+	}
+
+	// 5. Check fields in OriginalInput if it's a Go struct / struct pointer
+	if c.OriginalInput != nil {
+		v := reflect.ValueOf(c.OriginalInput)
+		if v.Kind() == reflect.Ptr {
+			if !v.IsNil() {
+				v = v.Elem()
+			}
+		}
+		if v.Kind() == reflect.Struct {
+			fields := getStructFieldIndexes(v.Type())
+			if idx, found := fields[name]; found {
+				return v.Field(idx).Interface(), true
+			}
+		}
 	}
 
 	return nil, false
@@ -268,6 +334,21 @@ func (c *Context) Snapshot() map[string]any {
 		res["user"] = m
 		for k, v := range m {
 			res[k] = v
+		}
+	} else if c.OriginalInput != nil {
+		res["payload"] = c.OriginalInput
+		res["user"] = c.OriginalInput
+		v := reflect.ValueOf(c.OriginalInput)
+		if v.Kind() == reflect.Ptr {
+			if !v.IsNil() {
+				v = v.Elem()
+			}
+		}
+		if v.Kind() == reflect.Struct {
+			fields := getStructFieldIndexes(v.Type())
+			for k, idx := range fields {
+				res[k] = v.Field(idx).Interface()
+			}
 		}
 	}
 	if c.SecondaryInput != nil {

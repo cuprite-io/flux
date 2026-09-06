@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.9.11] - 2026-09-06
+
+### Performance
+- **Compiler Single-Line Fast Path & Direct Struct Field Introspection** (`internal/compiler/compiler.go`, `internal/state/state.go`):
+  - Fast-pathed single-line expression preprocessing in `compiler.preprocess` by checking `!strings.ContainsRune(expr, '\n')`, eliminating string splitting, trimming allocations, and slice creations for single-line Volt expressions.
+  - Implemented cached struct field index map (`structTypeCache`) inside `state.Context` to accelerate struct attribute lookups and snapshots without full map conversions.
+
+---
+
 ## [0.9.10] - 2026-09-06
 
 ### Performance

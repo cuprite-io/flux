@@ -407,6 +407,9 @@ func (c *Compiler) Validate(expr string) error {
 }
 
 func (c *Compiler) preprocess(expr string) string {
+	if !strings.ContainsRune(expr, '\n') {
+		return expr
+	}
 	lines := strings.Split(expr, "\n")
 	clean := make([]string, 0, len(lines))
 	for _, l := range lines {
