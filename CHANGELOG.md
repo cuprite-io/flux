@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.9.10] - 2026-09-06
+
+### Performance
+- **Condition Unboxing Fast Path & Return Assignment Optimization** (`internal/engine/executor.go`, `internal/state/state.go`):
+  - Fast-pathed boolean guard evaluation in `evalCondition` by comparing evaluated CEL values directly against singleton pointers (`celtypes.True`, `celtypes.False`), bypassing reflection unboxing.
+  - Eliminated duplicate map allocation and key iteration in `sctx.SetReturn()` by directly assigning the input map pointer on first write.
+  - Reduced parallel `Conduct()` candidate scoring latency to **472 µs/query** (down from **783 µs/query**).
+
+---
+
 ## [0.9.9] - 2026-09-02
 
 ### Performance

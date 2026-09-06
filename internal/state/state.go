@@ -287,7 +287,8 @@ func (c *Context) SetReturn(data map[string]any) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if c.returnData == nil {
-		c.returnData = make(map[string]any, len(data))
+		c.returnData = data
+		return
 	}
 	for k, v := range data {
 		c.returnData[k] = v

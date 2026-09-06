@@ -12,6 +12,7 @@ import (
 	"github.com/cuprite-io/flux/internal/state"
 	"github.com/cuprite-io/flux/types"
 	"github.com/google/cel-go/cel"
+	celtypes "github.com/google/cel-go/common/types"
 )
 
 var (
@@ -269,6 +270,12 @@ func (e *Executor) evalCondition(ctx context.Context, expr string, sctx *state.C
 	out, _, err := prog.Eval(sctx)
 	if err != nil {
 		return false, err
+	}
+	if out == celtypes.True {
+		return true, nil
+	}
+	if out == celtypes.False {
+		return false, nil
 	}
 	if b, ok := out.Value().(bool); ok {
 		return b, nil
