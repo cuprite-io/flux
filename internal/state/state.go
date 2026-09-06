@@ -275,12 +275,21 @@ func (c *Context) ResolveName(name string) (any, bool) {
 		return v, true
 	}
 
-	// 2. Check special named scopes ("payload", "user", "item")
-	if name == "payload" || name == "user" {
-		return c.OriginalInput, true
+	// 2. Check special named scopes ("payload", "user", "entity", "context", "state", "item")
+	if name == "payload" || name == "user" || name == "entity" || name == "context" {
+		if c.OriginalInput != nil {
+			return c.OriginalInput, true
+		}
+		return map[string]any{}, true
 	}
-	if name == "item" && c.SecondaryInput != nil {
-		return c.SecondaryInput, true
+	if name == "state" {
+		return c.scratchpad, true
+	}
+	if name == "item" {
+		if c.SecondaryInput != nil {
+			return c.SecondaryInput, true
+		}
+		return map[string]any{}, true
 	}
 
 	// 3. Check SecondaryInput layer
@@ -433,17 +442,23 @@ func (c *Context) Errors() []error {
 
 // ExportType converts internal Context into public types.StateContext.
 func (c *Context) ExportType() *types.StateContext {
+	snap := c.Snapshot()
+	errs := c.Errors()
+
 	c.mu.RLock()
-	defer c.mu.RUnlock()
+	ctx := c.Ctx
+	orig := c.OriginalInput
+	ret := c.returnData
+	c.mu.RUnlock()
 
 	return &types.StateContext{
-		Ctx:           c.Ctx,
-		OriginalInput: c.OriginalInput,
-		Scratchpad:    c.Snapshot(),
-		ReturnData:    c.returnData,
+		Ctx:           ctx,
+		OriginalInput: orig,
+		Scratchpad:    snap,
+		ReturnData:    ret,
 		DeadMask:      atomic.LoadUint64(&c.deadMask),
 		Aborted:       atomic.LoadUint32(&c.aborted) == 1,
-		Errors:        c.Errors(),
+		Errors:        errs,
 	}
 }
 

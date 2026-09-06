@@ -7,6 +7,43 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.9.12] - 2026-09-06
+
+### Fixed
+- **Registry Single Source of Truth & Statelessness** (`internal/registry/registry.go`):
+  - Refactored `Registry` to be a 100% pure stateless adapter directly over `CacheBackend` (Capacitor), eliminating all in-memory `RegistrySnapshot` shadow caching.
+  - Stored circuits directly under `registry:circuits` partition maps and indexed tags via distributed sets (`registry:tag:<tag>`).
+  - Replaced $O(N^2)$ write-time index rebuilding with incremental $O(1)$ `SetAdd`/`SetRemove` operations.
+  - Sorted matched circuit IDs deterministically in `GetMatching` across multi-node clusters.
+- **Volt Script Execution & Trailing Expression Evaluation** (`internal/engine/executor.go`):
+  - Fixed `StepVolt` execution to evaluate extracted `set(...)` state mutations into `sctx` AND evaluate the full CEL expression (`mainProg`), preventing trailing logic from being silently discarded.
+- **CEL Variable Resolution & Environment Cleanup** (`internal/state/state.go`, `internal/compiler/compiler.go`):
+  - Resolved `payload`, `user`, `entity`, and `context` to `OriginalInput`, `state` to `scratchpad`, and `item` to `SecondaryInput` in `state.Context.ResolveName`.
+  - Removed dead `window` and `cache` pseudo-variable declarations from the base CEL environment in favor of standard function namespaces.
+- **Timeout & Cancellation Propagation** (`flux.go`, `internal/engine/executor.go`, `internal/compiler/compiler.go`):
+  - Enforced `ConductRequest.Timeout` in `Engine.Conduct` via `context.WithTimeout`.
+  - Added `ctx.Err()` cancellation checks inside `executeNode` and `evalCondition`.
+  - Added bounded 2s timeout contexts on distributed cache operator calls (`window.count`, `cache.get`).
+- **Memory Defensive Copying & Boundary Isolation** (`flux.go`):
+  - Introduced `cloneMap` at the `Conduct` result boundary for `EvaluatedItem.Data` and `EvaluatedItem.ComputedOutput`, eliminating mutable reference aliasing.
+- **Cache Ownership & Cleanup** (`flux.go`, `internal/cache/cache.go`):
+  - Added `ownedCache` flag to `Engine` so `Engine.Close()` does not close shared external `CacheBackend` instances.
+  - Fixed `MemoryCache` TTL leaks in `Get`, `Exists`, and `Increment`, cleaned `maps` partitions in `Delete`, and replaced JSON serialization in `Increment` with `strconv`.
+  - Filtered sliding window timestamps in-place in `IncrementSlidingWindow` to eliminate slice reallocation.
+- **Deadlock & Concurrency Safety** (`internal/state/state.go`, `flux.go`):
+  - Fixed reentrant `RLock` in `ExportType` by snapshotting state and errors without nested reader locks.
+  - Removed unused `Engine.mu`.
+- **CLI & Loader Validation** (`declarative.go`, `cmd/flux/main.go`):
+  - Propagated errors in `LoadCircuitsFromDir` on file read/parse failures.
+  - Added JSON unmarshal error checks in `cmd/flux eval`.
+  - Added recursive Volt expression syntax compilation and validation in `cmd/flux validate`.
+- **Compiler Benchmark Repair** (`internal/compiler/compiler_test.go`):
+  - Fixed `BenchmarkCompiler_Eval` to compile valid scoped variables (`payload.amount`, `payload.card_id`), running at 1.4 µs/op.
+- **Go Version Directive** (`go.mod`):
+  - Lowered `go.mod` directive from `go 1.27.0` to `go 1.22.0`.
+
+---
+
 ## [0.9.11] - 2026-09-06
 
 ### Performance

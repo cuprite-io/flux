@@ -218,7 +218,10 @@ func LoadCircuitsFromDir(dir string) ([]*types.Circuit, error) {
 		if strings.HasSuffix(name, ".circuit.json") || strings.HasSuffix(name, ".circuit.yaml") || strings.HasSuffix(name, ".circuit.yml") || strings.HasSuffix(name, ".json") {
 			fullPath := filepath.Join(dir, name)
 			c, err := LoadCircuitFile(fullPath)
-			if err == nil && c != nil && c.ID != "" {
+			if err != nil {
+				return nil, fmt.Errorf("flux: failed to load circuit file %s: %w", fullPath, err)
+			}
+			if c != nil && c.ID != "" {
 				circuits = append(circuits, c)
 			}
 		}

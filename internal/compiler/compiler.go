@@ -32,8 +32,6 @@ func NewCompiler(cacheAccess CacheAccessor) (*Compiler, error) {
 		cel.Variable("user", cel.MapType(cel.StringType, cel.AnyType)),
 		cel.Variable("item", cel.MapType(cel.StringType, cel.AnyType)),
 		cel.Variable("context", cel.MapType(cel.StringType, cel.AnyType)),
-		cel.Variable("window", cel.MapType(cel.StringType, cel.AnyType)),
-		cel.Variable("cache", cel.MapType(cel.StringType, cel.AnyType)),
 		ext.Strings(),
 		ext.Math(),
 	)
@@ -51,9 +49,31 @@ func NewCompiler(cacheAccess CacheAccessor) (*Compiler, error) {
 			),
 		),
 		cel.Function("get",
+			cel.Overload("get_map_key_fallback", []*cel.Type{cel.MapType(cel.StringType, cel.AnyType), cel.StringType, cel.AnyType}, cel.AnyType,
+				cel.FunctionBinding(func(args ...ref.Val) ref.Val {
+					m, _ := args[0].ConvertToNative(reflect.TypeOf(map[string]any{}))
+					k, ok := args[1].(celtypes.String)
+					if !ok {
+						return args[2]
+					}
+					mm, _ := m.(map[string]any)
+					return celtypes.DefaultTypeAdapter.NativeToValue(OpGet(mm, string(k), args[2].Value()))
+				})),
 			cel.Overload("get_key_fallback", []*cel.Type{cel.StringType, cel.AnyType}, cel.AnyType,
 				cel.FunctionBinding(func(args ...ref.Val) ref.Val {
 					return args[1]
+				})),
+		),
+		cel.Function("map.get",
+			cel.Overload("map_get_key_fallback", []*cel.Type{cel.MapType(cel.StringType, cel.AnyType), cel.StringType, cel.AnyType}, cel.AnyType,
+				cel.FunctionBinding(func(args ...ref.Val) ref.Val {
+					m, _ := args[0].ConvertToNative(reflect.TypeOf(map[string]any{}))
+					k, ok := args[1].(celtypes.String)
+					if !ok {
+						return args[2]
+					}
+					mm, _ := m.(map[string]any)
+					return celtypes.DefaultTypeAdapter.NativeToValue(OpGet(mm, string(k), args[2].Value()))
 				})),
 		),
 		cel.Function("map.merge",
@@ -347,7 +367,9 @@ func NewCompiler(cacheAccess CacheAccessor) (*Compiler, error) {
 						dur = time.Minute
 					}
 					if cacheAccess != nil {
-						count, _ := cacheAccess.IncrementSlidingWindow(context.Background(), key, dur)
+						opCtx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+						count, _ := cacheAccess.IncrementSlidingWindow(opCtx, key, dur)
+						cancel()
 						return celtypes.Int(count)
 					}
 					return celtypes.Int(1)
@@ -358,7 +380,9 @@ func NewCompiler(cacheAccess CacheAccessor) (*Compiler, error) {
 				cel.FunctionBinding(func(args ...ref.Val) ref.Val {
 					key := string(args[0].(celtypes.String))
 					if cacheAccess != nil {
-						val, _ := cacheAccess.Get(context.Background(), key)
+						opCtx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+						val, _ := cacheAccess.Get(opCtx, key)
+						cancel()
 						return celtypes.String(val)
 					}
 					return celtypes.String("")

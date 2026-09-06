@@ -86,6 +86,11 @@ func (e *Executor) ExecuteCircuit(ctx context.Context, circuit *types.Circuit, s
 
 // executeNode evaluates a node's condition, executes its sequential steps, and dispatches children.
 func (e *Executor) executeNode(ctx context.Context, node *types.Node, sctx *state.Context, nodeBit uint64) {
+	if ctx.Err() != nil {
+		sctx.Abort()
+		return
+	}
+
 	// 1. Bitmask Pruning Check: If this node is already marked dead, skip entire sub-tree
 	if sctx.IsPruned(nodeBit) || sctx.IsAborted() {
 		return
@@ -108,7 +113,7 @@ func (e *Executor) executeNode(ctx context.Context, node *types.Node, sctx *stat
 
 	// 3. Execute Node's Sequential Steps
 	for _, step := range node.Steps {
-		if sctx.IsAborted() {
+		if ctx.Err() != nil || sctx.IsAborted() {
 			return
 		}
 		if err := e.executeStep(ctx, step, sctx); err != nil {
@@ -181,13 +186,12 @@ func (e *Executor) getOrCompileScript(script string) (*compiledVoltScript, error
 				prog: p,
 			})
 		}
-	} else {
-		p, err := e.compiler.Compile(script)
-		if err != nil {
-			return nil, err
-		}
-		compiled.mainProg = p
 	}
+	p, err := e.compiler.Compile(script)
+	if err != nil {
+		return nil, err
+	}
+	compiled.mainProg = p
 
 	actual, _ := e.scriptCache.LoadOrStore(script, compiled)
 	return actual.(*compiledVoltScript), nil
@@ -208,11 +212,13 @@ func (e *Executor) executeStep(ctx context.Context, step *types.StepDefinition, 
 		if len(compiled.setStatements) > 0 {
 			for _, stmt := range compiled.setStatements {
 				out, _, errEval := stmt.prog.Eval(sctx)
-				if errEval == nil && out != nil {
+				if errEval != nil {
+					return fmt.Errorf("set %s: %w", stmt.key, errEval)
+				}
+				if out != nil {
 					sctx.Set(stmt.key, out.Value())
 				}
 			}
-			return nil
 		}
 
 		if compiled.mainProg != nil {
@@ -229,7 +235,19 @@ func (e *Executor) executeStep(ctx context.Context, step *types.StepDefinition, 
 			}
 		}
 		if e.sinkFn != nil && step.SinkName != "" {
-			payload := sctx.Snapshot()
+			var payload any
+			if step.Payload != "" && step.Payload != "kafka_sink" && step.Payload != "http_sink" && step.Payload != "webhook" {
+				if val, found := sctx.Get(step.Payload); found {
+					payload = val
+				} else if m, ok := sctx.OriginalInput.(map[string]any); ok {
+					if val, found := m[step.Payload]; found {
+						payload = val
+					}
+				}
+			}
+			if payload == nil {
+				payload = sctx.Snapshot()
+			}
 			return e.sinkFn(step.SinkName, payload)
 		}
 		return nil
@@ -239,8 +257,22 @@ func (e *Executor) executeStep(ctx context.Context, step *types.StepDefinition, 
 			res := make(map[string]any, len(step.ReturnMap))
 			for outKey, stateKeyOrExpr := range step.ReturnMap {
 				if keyStr, ok := stateKeyOrExpr.(string); ok {
-					if val, found := sctx.Get(keyStr); found {
+					if strings.HasPrefix(keyStr, "$") {
+						// Explicit state variable lookup prefix
+						rawKey := strings.TrimPrefix(keyStr, "$")
+						if val, found := sctx.Get(rawKey); found {
+							res[outKey] = val
+						} else {
+							res[outKey] = nil
+						}
+					} else if val, found := sctx.Get(keyStr); found {
 						res[outKey] = val
+					} else if m, ok := sctx.OriginalInput.(map[string]any); ok {
+						if val, found := m[keyStr]; found {
+							res[outKey] = val
+						} else {
+							res[outKey] = keyStr
+						}
 					} else {
 						res[outKey] = keyStr
 					}
@@ -263,6 +295,9 @@ func (e *Executor) executeStep(ctx context.Context, step *types.StepDefinition, 
 
 // evalCondition evaluates a boolean Volt guard expression.
 func (e *Executor) evalCondition(ctx context.Context, expr string, sctx *state.Context) (bool, error) {
+	if err := ctx.Err(); err != nil {
+		return false, err
+	}
 	prog, err := e.compiler.Compile(expr)
 	if err != nil {
 		return false, err

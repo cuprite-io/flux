@@ -232,15 +232,17 @@ func BenchmarkCompiler_Eval(b *testing.B) {
 		b.Fatal(err)
 	}
 
-	expr := `amount >= 1000.0 && is_pii(card_id)`
+	expr := `payload.amount >= 1000.0 && is_pii(payload.card_id)`
 	prog, err := comp.Compile(expr)
 	if err != nil {
 		b.Fatal(err)
 	}
 
 	input := map[string]any{
-		"amount":  5000.0,
-		"card_id": "user@example.com",
+		"payload": map[string]any{
+			"amount":  5000.0,
+			"card_id": "user@example.com",
+		},
 	}
 
 	b.ResetTimer()

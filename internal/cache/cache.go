@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"strconv"
 	"sync"
 	"time"
 )
@@ -62,14 +63,15 @@ func NewMemoryCache() *MemoryCache {
 }
 
 func (m *MemoryCache) Get(ctx context.Context, key string) (string, error) {
-	m.mu.RLock()
-	defer m.mu.RUnlock()
+	m.mu.Lock()
+	defer m.mu.Unlock()
 
 	entry, ok := m.data[key]
 	if !ok {
 		return "", ErrKeyNotFound
 	}
 	if !entry.expiresAt.IsZero() && time.Now().After(entry.expiresAt) {
+		delete(m.data, key)
 		return "", ErrKeyNotFound
 	}
 	return entry.val, nil
@@ -118,19 +120,21 @@ func (m *MemoryCache) Delete(ctx context.Context, key string) error {
 	defer m.mu.Unlock()
 	delete(m.data, key)
 	delete(m.sets, key)
+	delete(m.maps, key)
 	delete(m.windows, key)
 	return nil
 }
 
 func (m *MemoryCache) Exists(ctx context.Context, key string) (bool, error) {
-	m.mu.RLock()
-	defer m.mu.RUnlock()
+	m.mu.Lock()
+	defer m.mu.Unlock()
 
 	entry, ok := m.data[key]
 	if !ok {
 		return false, nil
 	}
 	if !entry.expiresAt.IsZero() && time.Now().After(entry.expiresAt) {
+		delete(m.data, key)
 		return false, nil
 	}
 	return true, nil
@@ -143,14 +147,14 @@ func (m *MemoryCache) Increment(ctx context.Context, key string) (int64, error) 
 	entry, ok := m.data[key]
 	var cur int64
 	if ok {
-		var n int64
-		if err := json.Unmarshal([]byte(entry.val), &n); err == nil {
+		if !entry.expiresAt.IsZero() && time.Now().After(entry.expiresAt) {
+			delete(m.data, key)
+		} else if n, err := strconv.ParseInt(entry.val, 10, 64); err == nil {
 			cur = n
 		}
 	}
 	cur++
-	b, _ := json.Marshal(cur)
-	m.data[key] = cacheEntry{val: string(b)}
+	m.data[key] = cacheEntry{val: strconv.FormatInt(cur, 10)}
 	return cur, nil
 }
 
@@ -167,17 +171,17 @@ func (m *MemoryCache) IncrementSlidingWindow(ctx context.Context, key string, wi
 		m.windows[key] = w
 	}
 
-	// Prune expired timestamps
-	valid := make([]time.Time, 0, len(w.timestamps)+1)
+	// Prune expired timestamps in-place without heap reallocation
+	k := 0
 	for _, t := range w.timestamps {
 		if t.After(cutoff) {
-			valid = append(valid, t)
+			w.timestamps[k] = t
+			k++
 		}
 	}
-	valid = append(valid, now)
-	w.timestamps = valid
+	w.timestamps = append(w.timestamps[:k], now)
 
-	return int64(len(valid)), nil
+	return int64(len(w.timestamps)), nil
 }
 
 func (m *MemoryCache) SetAdd(ctx context.Context, key string, member any) (bool, error) {

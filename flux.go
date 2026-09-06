@@ -25,15 +25,15 @@ import (
 
 // Engine is the unified, high-performance Circuit execution data plane.
 type Engine struct {
-	cache    cache.CacheBackend
-	registry *registry.Registry
-	catalog  *catalog.Catalog
-	sinks    *sink.Registry
-	pool     *pool.WorkerPool
-	compiler *compiler.Compiler
-	executor *engine.Executor
-	workers  int
-	mu       sync.RWMutex
+	cache      cache.CacheBackend
+	ownedCache bool
+	registry   *registry.Registry
+	catalog    *catalog.Catalog
+	sinks      *sink.Registry
+	pool       *pool.WorkerPool
+	compiler   *compiler.Compiler
+	executor   *engine.Executor
+	workers    int
 }
 
 // New creates and initializes a new Flux Engine.
@@ -49,6 +49,7 @@ func New(opts ...Option) (*Engine, error) {
 
 	if e.cache == nil {
 		e.cache = cache.NewMemoryCache()
+		e.ownedCache = true
 	}
 
 	e.registry = registry.New(e.cache)
@@ -84,17 +85,15 @@ func (e *Engine) RegisterSink(name string, s sink.Sink) {
 }
 
 // Close gracefully stops the Engine and drains all background queues.
+// If the cache backend was externally supplied via WithCache, it is left open.
 func (e *Engine) Close() error {
-	e.mu.Lock()
-	defer e.mu.Unlock()
-
 	if e.sinks != nil {
 		_ = e.sinks.Close()
 	}
 	if e.pool != nil {
 		e.pool.Close()
 	}
-	if e.cache != nil {
+	if e.ownedCache && e.cache != nil {
 		_ = e.cache.Close()
 	}
 	return nil
@@ -190,6 +189,12 @@ func (e *Engine) Conduct(ctx context.Context, req *types.ConductRequest) (*types
 		return nil, errors.New("flux: conduct request required")
 	}
 
+	if req.Timeout > 0 {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, req.Timeout)
+		defer cancel()
+	}
+
 	startTime := time.Now()
 
 	// 1. Fetch Candidate Items matching target category partition in 1 call
@@ -233,13 +238,17 @@ func (e *Engine) Conduct(ctx context.Context, req *types.ConductRequest) (*types
 		e.pool.Submit(func() {
 			defer latch.CountDown()
 
+			if ctx.Err() != nil {
+				return
+			}
+
 			// Check item embedded qualification circuit
 			if item.Circuit == nil {
 				// No qualification circuit -> automatically qualified with base data
 				evalResults[rankIdx] = &types.EvaluatedItem{
 					ID:             item.ID,
-					Data:           item.Data,
-					ComputedOutput: item.Data,
+					Data:           cloneMap(item.Data),
+					ComputedOutput: cloneMap(item.Data),
 					Score:          1.0,
 					Rank:           rankIdx + 1,
 				}
@@ -257,15 +266,15 @@ func (e *Engine) Conduct(ctx context.Context, req *types.ConductRequest) (*types
 				return
 			}
 
-			computedOut := item.Data
+			computedOut := cloneMap(item.Data)
 			if len(res.ReturnedData) > 0 {
-				computedOut = res.ReturnedData
+				computedOut = cloneMap(res.ReturnedData)
 			}
 			state.ReleaseContext(sctx)
 
 			evalResults[rankIdx] = &types.EvaluatedItem{
 				ID:             item.ID,
-				Data:           item.Data,
+				Data:           cloneMap(item.Data),
 				ComputedOutput: computedOut,
 				Score:          1.0,
 				Rank:           0,
@@ -434,4 +443,15 @@ func normalizeInput(payload any) any {
 	}
 
 	return payload
+}
+
+func cloneMap(m map[string]any) map[string]any {
+	if m == nil {
+		return nil
+	}
+	res := make(map[string]any, len(m))
+	for k, v := range m {
+		res[k] = v
+	}
+	return res
 }

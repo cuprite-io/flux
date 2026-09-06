@@ -2,11 +2,11 @@ package registry
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"hash/crc64"
-	"sync"
-	"sync/atomic"
+	"sort"
 	"unsafe"
 
 	"github.com/cuprite-io/flux/internal/cache"
@@ -133,146 +133,143 @@ func DecodeFBWF(id string, data []byte) (*vm.Program, error) {
 	return vm.NewProgram(id, steps, nil, constPool, nil), nil
 }
 
-// RegistrySnapshot represents an immutable point-in-time snapshot of registered Circuits.
-type RegistrySnapshot struct {
-	circuits    map[string]*types.Circuit
-	tagCircuits map[string][]*types.Circuit // tag -> []*types.Circuit (pre-resolved pointers for 0-allocation matching)
-}
+const (
+	circuitsMapKey = "registry:circuits"
+	tagSetPrefix   = "registry:tag:"
+)
 
-// Registry manages standalone Circuit storage, tag indexing, and atomic hot-swapping.
+// Registry manages standalone Circuit storage and tag indexing directly in the CacheBackend (Capacitor).
+// It maintains ZERO local in-memory shadow copies, guaranteeing 100% multi-node cluster convergence.
 type Registry struct {
 	cacheBackend cache.CacheBackend
-	mu           sync.RWMutex
-	current      atomic.Pointer[RegistrySnapshot]
+	fallback     *cache.MemoryCache
 }
 
-// New creates a new Registry connected to an optional CacheBackend.
+// New creates a new stateless Registry backed directly by the provided CacheBackend.
+// If backend is nil, an in-memory fallback cache is initialized.
 func New(backend cache.CacheBackend) *Registry {
 	r := &Registry{
 		cacheBackend: backend,
 	}
-	r.current.Store(&RegistrySnapshot{
-		circuits:    make(map[string]*types.Circuit),
-		tagCircuits: make(map[string][]*types.Circuit),
-	})
+	if backend == nil {
+		r.fallback = cache.NewMemoryCache()
+	}
 	return r
 }
 
-// Put registers or updates a Circuit with zero-downtime atomic hot-swapping.
+func (r *Registry) backend() cache.CacheBackend {
+	if r.cacheBackend != nil {
+		return r.cacheBackend
+	}
+	return r.fallback
+}
+
+// Put registers or updates a Circuit directly in Capacitor with zero shadow caching.
 func (r *Registry) Put(ctx context.Context, circuit *types.Circuit) error {
 	if circuit == nil || circuit.ID == "" {
 		return errors.New("flux registry: circuit ID required")
 	}
 
-	r.mu.Lock()
-	defer r.mu.Unlock()
-
-	cur := r.current.Load()
-
-	// Clone map for copy-on-write snapshot
-	newCircuits := make(map[string]*types.Circuit, len(cur.circuits)+1)
-	for k, v := range cur.circuits {
-		newCircuits[k] = v
+	data, err := json.Marshal(circuit)
+	if err != nil {
+		return fmt.Errorf("flux registry: failed to marshal circuit %s: %w", circuit.ID, err)
 	}
-	newCircuits[circuit.ID] = circuit
 
-	// Rebuild tag index with pre-resolved circuit pointers
-	newTagCircuits := make(map[string][]*types.Circuit)
-	for _, c := range newCircuits {
-		for _, tag := range c.Tags {
-			newTagCircuits[tag] = append(newTagCircuits[tag], c)
+	// Store circuit in Capacitor's partitioned circuits map
+	if _, err := r.backend().MapSet(ctx, circuitsMapKey, circuit.ID, string(data), 0); err != nil {
+		return err
+	}
+
+	// Index tags incrementally in Capacitor distributed sets
+	for _, tag := range circuit.Tags {
+		if tag != "" {
+			if _, err := r.backend().SetAdd(ctx, tagSetPrefix+tag, circuit.ID); err != nil {
+				return err
+			}
 		}
-	}
-
-	// Atomically hot-swap the pointer (Spark execution threads see new state with 0 locks)
-	r.current.Store(&RegistrySnapshot{
-		circuits:    newCircuits,
-		tagCircuits: newTagCircuits,
-	})
-
-	// Optionally persist to CacheBackend if present
-	if r.cacheBackend != nil {
-		_ = r.cacheBackend.Set(ctx, "circuit:"+circuit.ID, circuit, 0)
 	}
 
 	return nil
 }
 
-// Get retrieves a Circuit by its ID.
+// Get retrieves a Circuit directly from Capacitor by its ID.
 func (r *Registry) Get(ctx context.Context, id string) (*types.Circuit, error) {
-	snap := r.current.Load()
-	c, ok := snap.circuits[id]
-	if !ok {
+	if id == "" {
 		return nil, ErrCircuitNotFound
 	}
-	return c, nil
+
+	var circuit types.Circuit
+	found, err := r.backend().MapGetScan(ctx, circuitsMapKey, id, &circuit)
+	if err != nil || !found {
+		return nil, ErrCircuitNotFound
+	}
+
+	return &circuit, nil
 }
 
-// GetMatching retrieves all Circuits that match any of the provided query tags.
+// GetMatching retrieves all Circuits that match any of the provided query tags directly from Capacitor.
 func (r *Registry) GetMatching(ctx context.Context, tags ...string) []*types.Circuit {
 	if len(tags) == 0 {
 		return nil
 	}
 
-	snap := r.current.Load()
-
-	// Fast path for single tag query
-	if len(tags) == 1 {
-		return snap.tagCircuits[tags[0]]
-	}
-
-	// Multi-tag query with deduplication
-	matched := make(map[string]*types.Circuit)
+	matchedIDs := make(map[string]struct{})
 	for _, tag := range tags {
-		if list, ok := snap.tagCircuits[tag]; ok {
-			for _, c := range list {
-				matched[c.ID] = c
+		if tag == "" {
+			continue
+		}
+		ids, err := r.backend().SetMembers(ctx, tagSetPrefix+tag)
+		if err == nil {
+			for _, id := range ids {
+				matchedIDs[id] = struct{}{}
 			}
 		}
 	}
 
-	if len(matched) == 0 {
+	if len(matchedIDs) == 0 {
 		return nil
 	}
 
-	res := make([]*types.Circuit, 0, len(matched))
-	for _, c := range matched {
-		res = append(res, c)
+	// Sort IDs for 100% deterministic evaluation order across cluster nodes
+	sortedIDs := make([]string, 0, len(matchedIDs))
+	for id := range matchedIDs {
+		sortedIDs = append(sortedIDs, id)
 	}
+	sort.Strings(sortedIDs)
+
+	res := make([]*types.Circuit, 0, len(sortedIDs))
+	for _, id := range sortedIDs {
+		var c types.Circuit
+		found, err := r.backend().MapGetScan(ctx, circuitsMapKey, id, &c)
+		if err == nil && found {
+			res = append(res, &c)
+		}
+	}
+
 	return res
 }
 
-// Delete removes a Circuit by ID.
+// Delete removes a Circuit by ID from Capacitor and clears its tag memberships.
 func (r *Registry) Delete(ctx context.Context, id string) error {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-
-	cur := r.current.Load()
-	if _, ok := cur.circuits[id]; !ok {
+	if id == "" {
 		return ErrCircuitNotFound
 	}
 
-	newCircuits := make(map[string]*types.Circuit, len(cur.circuits))
-	for k, v := range cur.circuits {
-		if k != id {
-			newCircuits[k] = v
+	// Read circuit first to clean up its tag sets
+	if existing, err := r.Get(ctx, id); err == nil && existing != nil {
+		for _, tag := range existing.Tags {
+			if tag != "" {
+				_, _ = r.backend().SetRemove(ctx, tagSetPrefix+tag, id)
+			}
 		}
 	}
 
-	newTagCircuits := make(map[string][]*types.Circuit)
-	for _, c := range newCircuits {
-		for _, tag := range c.Tags {
-			newTagCircuits[tag] = append(newTagCircuits[tag], c)
-		}
+	found, err := r.backend().MapRemove(ctx, circuitsMapKey, id)
+	if err != nil {
+		return err
 	}
-
-	r.current.Store(&RegistrySnapshot{
-		circuits:    newCircuits,
-		tagCircuits: newTagCircuits,
-	})
-
-	if r.cacheBackend != nil {
-		_ = r.cacheBackend.Delete(ctx, "circuit:"+id)
+	if !found {
+		return ErrCircuitNotFound
 	}
 
 	return nil

@@ -7,6 +7,7 @@ import (
 	"os"
 
 	"github.com/cuprite-io/flux"
+	"github.com/cuprite-io/flux/internal/compiler"
 	"github.com/cuprite-io/flux/types"
 	"github.com/spf13/cobra"
 )
@@ -40,14 +41,18 @@ var evalCmd = &cobra.Command{
 		var payload any
 		if payloadFlag != "" {
 			if payloadFlag[0] == '{' || payloadFlag[0] == '[' {
-				_ = json.Unmarshal([]byte(payloadFlag), &payload)
+				if err := json.Unmarshal([]byte(payloadFlag), &payload); err != nil {
+					return fmt.Errorf("failed to parse payload JSON: %w", err)
+				}
 			} else {
 				// Read payload from file
 				data, err := os.ReadFile(payloadFlag)
 				if err != nil {
 					return fmt.Errorf("failed to read payload file: %w", err)
 				}
-				_ = json.Unmarshal(data, &payload)
+				if err := json.Unmarshal(data, &payload); err != nil {
+					return fmt.Errorf("failed to parse payload file JSON: %w", err)
+				}
 			}
 		} else {
 			payload = map[string]any{}
@@ -71,20 +76,62 @@ var evalCmd = &cobra.Command{
 	},
 }
 
+func validateNodeExpressions(comp *compiler.Compiler, n *types.Node) error {
+	if n == nil {
+		return nil
+	}
+	if n.Condition != "" {
+		if _, err := comp.Compile(n.Condition); err != nil {
+			return fmt.Errorf("node %q condition syntax error: %w", n.Name, err)
+		}
+	}
+	for _, s := range n.Steps {
+		if s.Type == types.StepVolt && s.Script != "" {
+			if _, err := comp.Compile(s.Script); err != nil {
+				return fmt.Errorf("node %q volt script syntax error: %w", n.Name, err)
+			}
+		}
+		if s.Condition != "" {
+			if _, err := comp.Compile(s.Condition); err != nil {
+				return fmt.Errorf("node %q step condition syntax error: %w", n.Name, err)
+			}
+		}
+	}
+	for _, child := range n.Children {
+		if err := validateNodeExpressions(comp, child); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 var validateCmd = &cobra.Command{
 	Use:   "validate <files...>",
 	Short: "Validate Circuit or Item JSON/YAML files for schema and syntax errors",
 	Args:  cobra.MinimumNArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
+		comp, _ := compiler.NewCompiler(nil)
 		for _, file := range args {
 			c, err := flux.LoadCircuitFile(file)
 			if err == nil && c != nil {
+				if comp != nil {
+					if valErr := validateNodeExpressions(comp, c.Root); valErr != nil {
+						fmt.Printf("✗ %s: Invalid Circuit Volt Syntax (%v)\n", file, valErr)
+						continue
+					}
+				}
 				fmt.Printf("✓ %s: Valid Circuit (ID: %s, Nodes: %d)\n", file, c.ID, countNodes(c.Root))
 				continue
 			}
 
 			it, errItem := flux.LoadItemFile(file)
 			if errItem == nil && it != nil {
+				if it.Circuit != nil && comp != nil {
+					if valErr := validateNodeExpressions(comp, it.Circuit.Root); valErr != nil {
+						fmt.Printf("✗ %s: Invalid Item Embedded Circuit Volt Syntax (%v)\n", file, valErr)
+						continue
+					}
+				}
 				fmt.Printf("✓ %s: Valid Candidate Item (ID: %s, Tags: %v)\n", file, it.ID, it.Tags)
 				continue
 			}

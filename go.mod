@@ -1,6 +1,6 @@
 module github.com/cuprite-io/flux
 
-go 1.27.0
+go 1.25.0
 
 require (
 	github.com/cuprite-io/capacitor v0.26.8

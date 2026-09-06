@@ -12,11 +12,9 @@ import (
 	"encoding/base64"
 	"encoding/hex"
 	"errors"
-	"fmt"
 	"hash/crc32"
 	"io"
 	"math"
-	"reflect"
 	"regexp"
 	"strings"
 	"time"
@@ -292,9 +290,4 @@ func OpMLScore(modelID string, vector []float64) float64 {
 	}
 	// Sigmoid normalization to 0.0..1.0
 	return 1.0 / (1.0 + math.Exp(-sum/1000.0))
-}
-
-func init() {
-	_ = reflect.TypeOf(map[string]any{})
-	_ = fmt.Sprintf("")
 }
