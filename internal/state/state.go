@@ -32,8 +32,9 @@ func FromContext(ctx context.Context) *Context {
 
 // Context manages the execution scratchpad, immutable input, and branch liveness for a Circuit run.
 type Context struct {
-	Ctx           context.Context
-	OriginalInput any
+	Ctx            context.Context
+	OriginalInput  any
+	SecondaryInput map[string]any // candidate item data or layered scope
 
 	// mu protects mutable maps during branch copy/write operations
 	mu         sync.RWMutex
@@ -66,6 +67,23 @@ func AcquireContext(ctx context.Context, input any) *Context {
 	c := contextPool.Get().(*Context)
 	c.Ctx = ctx
 	c.OriginalInput = input
+	c.SecondaryInput = nil
+	c.deadMask = 0
+	c.aborted = 0
+	c.errors = nil
+	c.returnData = nil
+	return c
+}
+
+// AcquireLayeredContext retrieves a clean Context configured with primary and secondary input layers.
+func AcquireLayeredContext(ctx context.Context, base any, layer map[string]any) *Context {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	c := contextPool.Get().(*Context)
+	c.Ctx = ctx
+	c.OriginalInput = base
+	c.SecondaryInput = layer
 	c.deadMask = 0
 	c.aborted = 0
 	c.errors = nil
@@ -80,6 +98,7 @@ func ReleaseContext(c *Context) {
 	}
 	c.Ctx = nil
 	c.OriginalInput = nil
+	c.SecondaryInput = nil
 	c.returnData = nil
 	c.errors = nil
 	c.mu.Lock()
@@ -166,13 +185,19 @@ func (c *Context) MergeChild(child *Context) {
 	child.errorsMu.Unlock()
 }
 
-// Get retrieves a variable from Scratchpad or OriginalInput map.
+// Get retrieves a variable from Scratchpad or OriginalInput/SecondaryInput map.
 func (c *Context) Get(key string) (any, bool) {
 	c.mu.RLock()
 	val, ok := c.scratchpad[key]
 	c.mu.RUnlock()
 	if ok {
 		return val, true
+	}
+
+	if c.SecondaryInput != nil {
+		if val, ok = c.SecondaryInput[key]; ok {
+			return val, true
+		}
 	}
 
 	// Check if OriginalInput is a map
@@ -201,12 +226,22 @@ func (c *Context) ResolveName(name string) (any, bool) {
 		return v, true
 	}
 
-	// 2. Check "payload" specifically
-	if name == "payload" {
+	// 2. Check special named scopes ("payload", "user", "item")
+	if name == "payload" || name == "user" {
 		return c.OriginalInput, true
 	}
+	if name == "item" && c.SecondaryInput != nil {
+		return c.SecondaryInput, true
+	}
 
-	// 3. Check fields in OriginalInput if it's a map
+	// 3. Check SecondaryInput layer
+	if c.SecondaryInput != nil {
+		if v, ok := c.SecondaryInput[name]; ok {
+			return v, true
+		}
+	}
+
+	// 4. Check fields in OriginalInput if it's a map (e.g. entity/user state)
 	if m, isMap := c.OriginalInput.(map[string]any); isMap {
 		if v, ok := m[name]; ok {
 			return v, true
@@ -230,7 +265,14 @@ func (c *Context) Snapshot() map[string]any {
 	// Base input if map
 	if m, isMap := c.OriginalInput.(map[string]any); isMap {
 		res["payload"] = m
+		res["user"] = m
 		for k, v := range m {
+			res[k] = v
+		}
+	}
+	if c.SecondaryInput != nil {
+		res["item"] = c.SecondaryInput
+		for k, v := range c.SecondaryInput {
 			res[k] = v
 		}
 	}

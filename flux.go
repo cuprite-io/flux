@@ -246,18 +246,8 @@ func (e *Engine) Conduct(ctx context.Context, req *types.ConductRequest) (*types
 				return
 			}
 
-			// Evaluate embedded circuit against hydrated entity state
-			itemContext := make(map[string]any, len(entityState)+len(item.Data)+2)
-			for k, v := range entityState {
-				itemContext[k] = v
-			}
-			for k, v := range item.Data {
-				itemContext[k] = v
-			}
-			itemContext["user"] = entityState
-			itemContext["item"] = item.Data
-
-			sctx := state.AcquireContext(ctx, itemContext)
+			// Evaluate embedded circuit against hydrated entity state via zero-allocation layered context
+			sctx := state.AcquireLayeredContext(ctx, entityState, item.Data)
 			res, err := e.executor.ExecuteCircuit(ctx, item.Circuit, sctx)
 
 			// Ineligible / aborted items are SILENTLY OMITTED

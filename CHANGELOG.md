@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.9.9] - 2026-09-02
+
+### Performance
+- **Zero-Allocation Layered Candidate Context in Conduct** (`internal/state/state.go`, `flux.go`):
+  - Added `SecondaryInput` and `AcquireLayeredContext` in `state.Context` implementing layered on-demand CEL variable resolution.
+  - Completely eliminated intermediate `itemContext` map allocations and key-copy loops across parallel candidate scoring worker threads.
+  - Decreased candidate scoring memory consumption from **393 KB $\rightarrow$ 226 KB** per query (**42.5% reduction**) and eliminated **700+ heap allocations**.
+
+---
+
 ## [0.9.8] - 2026-09-02
 
 ### Performance
