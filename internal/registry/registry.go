@@ -170,21 +170,40 @@ func (r *Registry) Put(ctx context.Context, circuit *types.Circuit) error {
 		return errors.New("flux registry: circuit ID required")
 	}
 
+	// 1. Reconcile stale tags if updating an existing circuit
+	if existing, err := r.Get(ctx, circuit.ID); err == nil && existing != nil {
+		newTags := make(map[string]struct{}, len(circuit.Tags))
+		for _, tag := range circuit.Tags {
+			if tag != "" {
+				newTags[tag] = struct{}{}
+			}
+		}
+		for _, oldTag := range existing.Tags {
+			if oldTag != "" {
+				if _, keep := newTags[oldTag]; !keep {
+					if _, errRem := r.backend().SetRemove(ctx, tagSetPrefix+oldTag, circuit.ID); errRem != nil {
+						return fmt.Errorf("flux registry: failed to remove stale tag %s: %w", oldTag, errRem)
+					}
+				}
+			}
+		}
+	}
+
 	data, err := json.Marshal(circuit)
 	if err != nil {
 		return fmt.Errorf("flux registry: failed to marshal circuit %s: %w", circuit.ID, err)
 	}
 
-	// Store circuit in Capacitor's partitioned circuits map
+	// 2. Store circuit in Capacitor's partitioned circuits map
 	if _, err := r.backend().MapSet(ctx, circuitsMapKey, circuit.ID, string(data), 0); err != nil {
-		return err
+		return fmt.Errorf("flux registry: failed to store circuit %s: %w", circuit.ID, err)
 	}
 
-	// Index tags incrementally in Capacitor distributed sets
+	// 3. Index new tags incrementally in Capacitor distributed sets
 	for _, tag := range circuit.Tags {
 		if tag != "" {
 			if _, err := r.backend().SetAdd(ctx, tagSetPrefix+tag, circuit.ID); err != nil {
-				return err
+				return fmt.Errorf("flux registry: failed to index tag %s for circuit %s: %w", tag, circuit.ID, err)
 			}
 		}
 	}
@@ -211,6 +230,30 @@ func (r *Registry) Get(ctx context.Context, id string) (*types.Circuit, error) {
 func (r *Registry) GetMatching(ctx context.Context, tags ...string) []*types.Circuit {
 	if len(tags) == 0 {
 		return nil
+	}
+
+	// Fast-path single tag query to avoid allocating map/slice tracking structures
+	if len(tags) == 1 {
+		tag := tags[0]
+		if tag == "" {
+			return nil
+		}
+		ids, err := r.backend().SetMembers(ctx, tagSetPrefix+tag)
+		if err != nil || len(ids) == 0 {
+			return nil
+		}
+		if len(ids) > 1 {
+			sort.Strings(ids)
+		}
+		res := make([]*types.Circuit, 0, len(ids))
+		for _, id := range ids {
+			var c types.Circuit
+			found, err := r.backend().MapGetScan(ctx, circuitsMapKey, id, &c)
+			if err == nil && found {
+				res = append(res, &c)
+			}
+		}
+		return res
 	}
 
 	matchedIDs := make(map[string]struct{})
@@ -259,7 +302,9 @@ func (r *Registry) Delete(ctx context.Context, id string) error {
 	if existing, err := r.Get(ctx, id); err == nil && existing != nil {
 		for _, tag := range existing.Tags {
 			if tag != "" {
-				_, _ = r.backend().SetRemove(ctx, tagSetPrefix+tag, id)
+				if _, errRem := r.backend().SetRemove(ctx, tagSetPrefix+tag, id); errRem != nil {
+					return fmt.Errorf("flux registry: failed to remove tag %s on delete: %w", tag, errRem)
+				}
 			}
 		}
 	}

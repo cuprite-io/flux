@@ -123,10 +123,20 @@ func OpMask(val, maskType string) string {
 
 // --- 3. Cryptography & Hashing ---
 
+// deriveAESGCMKey derives a 256-bit AES key using domain-separated HMAC-SHA256.
+// Note: For slow password hashing in user credential authentication, use Argon2id/scrypt upstream.
+func deriveAESGCMKey(key string) []byte {
+	salt := []byte("flux:aes-gcm:kdf:v1")
+	h := hmac.New(sha256.New, salt)
+	h.Write([]byte(key))
+	return h.Sum(nil)
+}
+
+// OpEncrypt encrypts plaintext using authenticated AES-256-GCM.
 func OpEncrypt(plaintext, key string) (string, error) {
 	p := []byte(plaintext)
-	k := sha256.Sum256([]byte(key))
-	block, err := aes.NewCipher(k[:])
+	k := deriveAESGCMKey(key)
+	block, err := aes.NewCipher(k)
 	if err != nil {
 		return "", err
 	}
@@ -141,13 +151,14 @@ func OpEncrypt(plaintext, key string) (string, error) {
 	return hex.EncodeToString(gcm.Seal(nonce, nonce, p, nil)), nil
 }
 
+// OpDecrypt decrypts authenticated AES-256-GCM ciphertext.
 func OpDecrypt(ciphertext, key string) (string, error) {
 	data, err := hex.DecodeString(ciphertext)
 	if err != nil {
 		return "", err
 	}
-	k := sha256.Sum256([]byte(key))
-	block, err := aes.NewCipher(k[:])
+	k := deriveAESGCMKey(key)
+	block, err := aes.NewCipher(k)
 	if err != nil {
 		return "", err
 	}

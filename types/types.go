@@ -40,6 +40,7 @@ type StepDefinition struct {
 	Type      StepType       `json:"type"`
 	Script    string         `json:"script,omitempty"`
 	SinkName  string         `json:"sink,omitempty"`
+	SinkType  string         `json:"sink_type,omitempty"`
 	Condition string         `json:"condition,omitempty"`
 	Payload   string         `json:"payload,omitempty"`
 	ReturnMap map[string]any `json:"data,omitempty"`

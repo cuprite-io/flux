@@ -5,9 +5,9 @@ import (
 	"fmt"
 	"reflect"
 	"strings"
-	"sync"
 	"time"
 
+	"github.com/cuprite-io/flux/internal/cache"
 	"github.com/cuprite-io/flux/internal/vm"
 	"github.com/google/cel-go/cel"
 	celtypes "github.com/google/cel-go/common/types"
@@ -19,7 +19,7 @@ import (
 // Compiler coordinates parsing, verification, and bytecode generation for Volt expressions.
 type Compiler struct {
 	env         *cel.Env
-	cache       sync.Map // string -> cel.Program
+	cache       *cache.BoundedCache[string, cel.Program]
 	cacheAccess CacheAccessor
 }
 
@@ -58,10 +58,6 @@ func NewCompiler(cacheAccess CacheAccessor) (*Compiler, error) {
 					}
 					mm, _ := m.(map[string]any)
 					return celtypes.DefaultTypeAdapter.NativeToValue(OpGet(mm, string(k), args[2].Value()))
-				})),
-			cel.Overload("get_key_fallback", []*cel.Type{cel.StringType, cel.AnyType}, cel.AnyType,
-				cel.FunctionBinding(func(args ...ref.Val) ref.Val {
-					return args[1]
 				})),
 		),
 		cel.Function("map.get",
@@ -147,8 +143,22 @@ func NewCompiler(cacheAccess CacheAccessor) (*Compiler, error) {
 					return celtypes.String(OpSha256(v))
 				})),
 		),
+		cel.Function("hash.sha256",
+			cel.Overload("hash_sha256_str", []*cel.Type{cel.StringType}, cel.StringType,
+				cel.FunctionBinding(func(args ...ref.Val) ref.Val {
+					v := string(args[0].(celtypes.String))
+					return celtypes.String(OpSha256(v))
+				})),
+		),
 		cel.Function("crypto.sha512",
 			cel.Overload("crypto_sha512_str", []*cel.Type{cel.StringType}, cel.StringType,
+				cel.FunctionBinding(func(args ...ref.Val) ref.Val {
+					v := string(args[0].(celtypes.String))
+					return celtypes.String(OpSha512(v))
+				})),
+		),
+		cel.Function("hash.sha512",
+			cel.Overload("hash_sha512_str", []*cel.Type{cel.StringType}, cel.StringType,
 				cel.FunctionBinding(func(args ...ref.Val) ref.Val {
 					v := string(args[0].(celtypes.String))
 					return celtypes.String(OpSha512(v))
@@ -161,8 +171,22 @@ func NewCompiler(cacheAccess CacheAccessor) (*Compiler, error) {
 					return celtypes.String(OpMd5(v))
 				})),
 		),
+		cel.Function("hash.md5",
+			cel.Overload("hash_md5_str", []*cel.Type{cel.StringType}, cel.StringType,
+				cel.FunctionBinding(func(args ...ref.Val) ref.Val {
+					v := string(args[0].(celtypes.String))
+					return celtypes.String(OpMd5(v))
+				})),
+		),
 		cel.Function("crypto.crc32",
 			cel.Overload("crypto_crc32_str", []*cel.Type{cel.StringType}, cel.UintType,
+				cel.FunctionBinding(func(args ...ref.Val) ref.Val {
+					v := string(args[0].(celtypes.String))
+					return celtypes.Uint(uint64(OpCrc32(v)))
+				})),
+		),
+		cel.Function("hash.crc32",
+			cel.Overload("hash_crc32_str", []*cel.Type{cel.StringType}, cel.UintType,
 				cel.FunctionBinding(func(args ...ref.Val) ref.Val {
 					v := string(args[0].(celtypes.String))
 					return celtypes.Uint(uint64(OpCrc32(v)))
@@ -395,14 +419,15 @@ func NewCompiler(cacheAccess CacheAccessor) (*Compiler, error) {
 
 	return &Compiler{
 		env:         env,
+		cache:       cache.NewBoundedCache[string, cel.Program](4096),
 		cacheAccess: cacheAccess,
 	}, nil
 }
 
 // Compile parses and compiles a Volt expression into an executable cel.Program.
 func (c *Compiler) Compile(expr string) (cel.Program, error) {
-	if p, ok := c.cache.Load(expr); ok {
-		return p.(cel.Program), nil
+	if p, ok := c.cache.Get(expr); ok {
+		return p, nil
 	}
 
 	cleanExpr := c.preprocess(expr)
@@ -416,7 +441,7 @@ func (c *Compiler) Compile(expr string) (cel.Program, error) {
 		return nil, fmt.Errorf("volt program error: %w", err)
 	}
 
-	c.cache.Store(expr, prog)
+	c.cache.Set(expr, prog)
 	return prog, nil
 }
 

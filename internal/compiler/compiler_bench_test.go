@@ -24,7 +24,7 @@ func BenchmarkOperator_State_Set(b *testing.B) {
 
 func BenchmarkOperator_State_Get(b *testing.B) {
 	comp, _ := compiler.NewCompiler(nil)
-	prog, _ := comp.Compile(`get("tier", "STANDARD")`)
+	prog, _ := comp.Compile(`get(state, "tier", "STANDARD")`)
 	input := map[string]any{"state": map[string]any{"tier": "VIP_PLATINUM"}}
 
 	b.ResetTimer()

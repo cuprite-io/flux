@@ -9,7 +9,6 @@ import (
 	"reflect"
 	"sort"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/cuprite-io/flux/internal/cache"
@@ -284,6 +283,10 @@ func (e *Engine) Conduct(ctx context.Context, req *types.ConductRequest) (*types
 
 	latch.Wait()
 
+	if err := ctx.Err(); err != nil {
+		return nil, fmt.Errorf("flux conduct: %w", err)
+	}
+
 	// 4. Compact qualified results lock-free
 	qualified := make([]types.EvaluatedItem, 0, len(items))
 	for _, res := range evalResults {
@@ -350,14 +353,14 @@ type structFieldInfo struct {
 	index int
 }
 
-var structFieldCache sync.Map // reflect.Type -> []structFieldInfo
+var structFieldCache = cache.NewBoundedCache[reflect.Type, []structFieldInfo](2048)
 
 func getStructFields(t reflect.Type) []structFieldInfo {
 	if t.Kind() == reflect.Ptr {
 		t = t.Elem()
 	}
-	if v, ok := structFieldCache.Load(t); ok {
-		return v.([]structFieldInfo)
+	if v, ok := structFieldCache.Get(t); ok {
+		return v
 	}
 
 	var fields []structFieldInfo
@@ -383,7 +386,7 @@ func getStructFields(t reflect.Type) []structFieldInfo {
 		})
 	}
 
-	structFieldCache.Store(t, fields)
+	structFieldCache.Set(t, fields)
 	return fields
 }
 

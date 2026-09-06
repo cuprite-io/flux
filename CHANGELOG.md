@@ -7,6 +7,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.9.13] - 2026-09-06
+
+### Fixed
+- **Volt `set(...)` Single-Evaluation Semantics** (`internal/engine/executor.go`):
+  - Fixed desugared `set(...)` evaluation by stripping extracted mutation calls from the compiled remainder expression (`mainProg`), ensuring side-effecting operators (`window.count`, `uuid`, `ml.score`, `cache.get`) evaluate strictly once per event.
+- **Registry Stale Tag Reconciliation & Error Propagation** (`internal/registry/registry.go`):
+  - Implemented tag diff reconciliation on `Put`: automatically removes circuit IDs from stale tags (`SetRemove`) and indexes new tags (`SetAdd`).
+  - Purged all tag index memberships on `Delete` and propagated storage/tag manipulation errors instead of swallowing them.
+- **Spark Single-Tag Performance & Memory Footprint** (`internal/registry/registry.go`):
+  - Implemented direct single-tag fast-path in `GetMatching` avoiding map allocations and slice copying on the hot path.
+  - Reduced `BenchmarkFlux_Spark` latency to **9.0 µs/op** and memory to **1,115 B/op (16 allocs)**, down from 42.7 µs/op and 8,147 B/op.
+- **Sink Type & Payload Projection Disambiguation** (`types/types.go`, `helpers.go`, `internal/engine/executor.go`):
+  - Added dedicated `SinkType` field to `types.StepDefinition` and updated `Sink(name, sinkType)` helper to set `step.SinkType`.
+  - Removed fragile hardcoded string blacklist from `executor.go`, allowing clean payload projection (`step.Payload`).
+- **Cache Read Concurrency & Bounded In-Memory Caches** (`internal/cache/cache.go`, `internal/compiler/compiler.go`, `internal/engine/executor.go`, `internal/state/state.go`, `flux.go`):
+  - Restored `m.mu.RLock()` fast path in `MemoryCache.Get` and `MemoryCache.Exists`, taking write lock only on lazy expiration deletion.
+  - Introduced `BoundedCache[K, V]` with FIFO capacity bounds (4096 / 2048) for `compiler.cache`, `executor.scriptCache`, `state.structTypeCache`, and `flux.structFieldCache` to prevent unbounded memory growth.
+- **Conduct Context Cancellation Propagation** (`flux.go`):
+  - Checked `ctx.Err()` after worker latch wait in `Conduct`, returning `nil, fmt.Errorf("flux conduct: %w", err)` on cancellation or deadline expiration.
+- **Domain-Separated Cryptographic KDF & Hash Aliases** (`internal/compiler/compiler.go`, `internal/compiler/operators.go`):
+  - Introduced domain-separated HMAC-SHA256 key derivation for authenticated AES-256-GCM encryption and decryption.
+  - Registered `hash.sha256`, `hash.sha512`, `hash.md5`, and `hash.crc32` function aliases.
+- **State Scope Resolution & DeadMask Bit Guard** (`internal/state/state.go`, `internal/engine/executor.go`):
+  - Isolated `res["state"]` and `name == "state"` with safe snapshot maps to prevent data races across goroutine boundaries.
+  - Added bit shift boundary guard (`childIdx < 62`) in child node work-stealing parallel dispatch.
+
+---
+
 ## [0.9.12] - 2026-09-06
 
 ### Fixed

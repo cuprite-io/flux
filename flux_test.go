@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/cuprite-io/flux"
+	"github.com/cuprite-io/flux/internal/cache"
 	"github.com/cuprite-io/flux/internal/sink"
 	"github.com/cuprite-io/flux/types"
 )
@@ -221,6 +222,107 @@ func TestFlux_OptionsAndCustomSink(t *testing.T) {
 	time.Sleep(30 * time.Millisecond)
 	if atomic.LoadInt64(&sinkFired) != 1 {
 		t.Errorf("expected 1 custom sink dispatch, got %d", sinkFired)
+	}
+}
+
+func TestFlux_VoltSingleEvaluation(t *testing.T) {
+	memCache := cache.NewMemoryCache()
+	eng, err := flux.New(flux.WithCache(memCache))
+	if err != nil {
+		t.Fatalf("failed to create engine: %v", err)
+	}
+	defer eng.Close()
+
+	// Script with set that increments sliding window counter
+	root := types.NewNode("single_eval_node").
+		Step(flux.Volt(`set('win_cnt', window.count('user:101', '60s')) && state.win_cnt > 0`))
+
+	circuit := types.NewCircuit("single_eval_circuit").
+		WithTags("test:single_eval").
+		WithRoot(root)
+
+	if err := eng.Registry().Put(context.Background(), circuit); err != nil {
+		t.Fatalf("put failed: %v", err)
+	}
+
+	res, err := eng.Spark(context.Background(), `{"id": "u1"}`, "test:single_eval")
+	if err != nil || !res.Passed {
+		t.Fatalf("spark failed: %v", err)
+	}
+
+	// Counter should be EXACTLY 1 (evaluated once, NOT twice)
+	countVal, err := memCache.IncrementSlidingWindow(context.Background(), "user:101", 60*time.Second)
+	if err != nil {
+		t.Fatalf("sliding window read failed: %v", err)
+	}
+	// Since we just called it a 2nd time, it should now be 2
+	if countVal != 2 {
+		t.Errorf("expected counter to be 2 after single spark + 1 manual increment, got: %d", countVal)
+	}
+}
+
+func TestFlux_ConductTimeoutCancellation(t *testing.T) {
+	eng, err := flux.New()
+	if err != nil {
+		t.Fatalf("failed to create engine: %v", err)
+	}
+	defer eng.Close()
+
+	_ = eng.Catalog().Put(context.Background(), &types.Item{
+		ID:       "item_slow",
+		Category: "offers",
+		Data:     map[string]any{"title": "Item"},
+	})
+
+	// Cancel context immediately
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	req := &types.ConductRequest{
+		Category: "offers",
+	}
+
+	_, err = eng.Conduct(ctx, req)
+	if err == nil {
+		t.Errorf("expected error on cancelled conduct context, got nil")
+	}
+}
+
+func TestFlux_SinkPayloadProjection(t *testing.T) {
+	payloadCh := make(chan any, 1)
+	mockSink := sink.FuncSink(func(ctx context.Context, payload any) error {
+		payloadCh <- payload
+		return nil
+	})
+
+	eng, err := flux.New(flux.WithSink("projected_sink", mockSink))
+	if err != nil {
+		t.Fatalf("failed to create engine: %v", err)
+	}
+	defer eng.Close()
+
+	root := types.NewNode("project_node").
+		Step(flux.Volt(`set('order_id', 'ord_12345')`)).
+		Step(flux.Sink("projected_sink", "kafka_sink").WithPayload("order_id"))
+
+	circuit := types.NewCircuit("project_circuit").
+		WithTags("test:project").
+		WithRoot(root)
+
+	_ = eng.Registry().Put(context.Background(), circuit)
+
+	_, err = eng.Spark(context.Background(), `{"user": "alice"}`, "test:project")
+	if err != nil {
+		t.Fatalf("spark failed: %v", err)
+	}
+
+	select {
+	case dispatched := <-payloadCh:
+		if dispatched != "ord_12345" {
+			t.Errorf("expected projected payload 'ord_12345', got: %v", dispatched)
+		}
+	case <-time.After(1 * time.Second):
+		t.Fatalf("timed out waiting for sink dispatch")
 	}
 }
 

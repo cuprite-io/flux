@@ -63,18 +63,26 @@ func NewMemoryCache() *MemoryCache {
 }
 
 func (m *MemoryCache) Get(ctx context.Context, key string) (string, error) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-
+	m.mu.RLock()
 	entry, ok := m.data[key]
 	if !ok {
+		m.mu.RUnlock()
 		return "", ErrKeyNotFound
 	}
-	if !entry.expiresAt.IsZero() && time.Now().After(entry.expiresAt) {
+	if entry.expiresAt.IsZero() || time.Now().Before(entry.expiresAt) {
+		val := entry.val
+		m.mu.RUnlock()
+		return val, nil
+	}
+	m.mu.RUnlock()
+
+	// Slow path: expired entry lazy cleanup
+	m.mu.Lock()
+	if e, exists := m.data[key]; exists && !e.expiresAt.IsZero() && time.Now().After(e.expiresAt) {
 		delete(m.data, key)
-		return "", ErrKeyNotFound
 	}
-	return entry.val, nil
+	m.mu.Unlock()
+	return "", ErrKeyNotFound
 }
 
 func (m *MemoryCache) GetScan(ctx context.Context, key string, dst any) error {
@@ -126,18 +134,25 @@ func (m *MemoryCache) Delete(ctx context.Context, key string) error {
 }
 
 func (m *MemoryCache) Exists(ctx context.Context, key string) (bool, error) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-
+	m.mu.RLock()
 	entry, ok := m.data[key]
 	if !ok {
+		m.mu.RUnlock()
 		return false, nil
 	}
-	if !entry.expiresAt.IsZero() && time.Now().After(entry.expiresAt) {
+	if entry.expiresAt.IsZero() || time.Now().Before(entry.expiresAt) {
+		m.mu.RUnlock()
+		return true, nil
+	}
+	m.mu.RUnlock()
+
+	// Slow path: expired entry lazy cleanup
+	m.mu.Lock()
+	if e, exists := m.data[key]; exists && !e.expiresAt.IsZero() && time.Now().After(e.expiresAt) {
 		delete(m.data, key)
-		return false, nil
 	}
-	return true, nil
+	m.mu.Unlock()
+	return false, nil
 }
 
 func (m *MemoryCache) Increment(ctx context.Context, key string) (int64, error) {
@@ -333,4 +348,73 @@ func formatMember(m any) string {
 		b, _ := json.Marshal(v)
 		return string(b)
 	}
+}
+
+// BoundedCache provides a thread-safe, bounded in-memory cache with FIFO eviction.
+type BoundedCache[K comparable, V any] struct {
+	mu       sync.RWMutex
+	capacity int
+	items    map[K]V
+	keys     []K
+}
+
+// NewBoundedCache initializes a BoundedCache with a maximum capacity.
+func NewBoundedCache[K comparable, V any](capacity int) *BoundedCache[K, V] {
+	if capacity <= 0 {
+		capacity = 4096
+	}
+	return &BoundedCache[K, V]{
+		capacity: capacity,
+		items:    make(map[K]V, capacity),
+		keys:     make([]K, 0, capacity),
+	}
+}
+
+// Get retrieves an item from the cache.
+func (c *BoundedCache[K, V]) Get(key K) (V, bool) {
+	c.mu.RLock()
+	val, ok := c.items[key]
+	c.mu.RUnlock()
+	return val, ok
+}
+
+// Set stores an item, evicting the oldest item if at capacity.
+func (c *BoundedCache[K, V]) Set(key K, val V) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	if _, exists := c.items[key]; exists {
+		c.items[key] = val
+		return
+	}
+
+	if len(c.items) >= c.capacity && len(c.keys) > 0 {
+		oldest := c.keys[0]
+		c.keys = c.keys[1:]
+		delete(c.items, oldest)
+	}
+
+	c.items[key] = val
+	c.keys = append(c.keys, key)
+}
+
+// LoadOrStore returns the existing value for the key if present.
+// Otherwise, it stores and returns the given value.
+func (c *BoundedCache[K, V]) LoadOrStore(key K, val V) (V, bool) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	if existing, exists := c.items[key]; exists {
+		return existing, true
+	}
+
+	if len(c.items) >= c.capacity && len(c.keys) > 0 {
+		oldest := c.keys[0]
+		c.keys = c.keys[1:]
+		delete(c.items, oldest)
+	}
+
+	c.items[key] = val
+	c.keys = append(c.keys, key)
+	return val, false
 }

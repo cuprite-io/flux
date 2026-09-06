@@ -82,6 +82,48 @@ func TestRegistry_HotSwappingAndTags(t *testing.T) {
 	}
 }
 
+func TestRegistry_TagReconciliationOnPut(t *testing.T) {
+	memCache := cache.NewMemoryCache()
+	reg := registry.New(memCache)
+
+	// 1. Initial Put with tags tagA and tagB
+	c := types.NewCircuit("c_dyn").WithTags("tagA", "tagB")
+	if err := reg.Put(context.Background(), c); err != nil {
+		t.Fatalf("put failed: %v", err)
+	}
+
+	if len(reg.GetMatching(context.Background(), "tagA")) != 1 {
+		t.Errorf("expected 1 match for tagA")
+	}
+	if len(reg.GetMatching(context.Background(), "tagB")) != 1 {
+		t.Errorf("expected 1 match for tagB")
+	}
+
+	// 2. Re-register c_dyn with ONLY tagC (tagA and tagB should be reconciled/purged)
+	cUpdated := types.NewCircuit("c_dyn").WithTags("tagC")
+	if err := reg.Put(context.Background(), cUpdated); err != nil {
+		t.Fatalf("updated put failed: %v", err)
+	}
+
+	if len(reg.GetMatching(context.Background(), "tagA")) != 0 {
+		t.Errorf("expected 0 matches for stale tagA after update")
+	}
+	if len(reg.GetMatching(context.Background(), "tagB")) != 0 {
+		t.Errorf("expected 0 matches for stale tagB after update")
+	}
+	if len(reg.GetMatching(context.Background(), "tagC")) != 1 {
+		t.Errorf("expected 1 match for new tagC")
+	}
+
+	// 3. Delete c_dyn and verify tagC is cleaned up
+	if err := reg.Delete(context.Background(), "c_dyn"); err != nil {
+		t.Fatalf("delete failed: %v", err)
+	}
+	if len(reg.GetMatching(context.Background(), "tagC")) != 0 {
+		t.Errorf("expected 0 matches for tagC after delete")
+	}
+}
+
 func BenchmarkFBWF_Decode(b *testing.B) {
 	steps := []vm.Step{
 		{Op: vm.OpAddInt, InRegs: [3]uint8{0, 1, 0}, OutReg: 2},

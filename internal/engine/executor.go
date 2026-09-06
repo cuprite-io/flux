@@ -5,8 +5,8 @@ import (
 	"errors"
 	"fmt"
 	"strings"
-	"sync"
 
+	"github.com/cuprite-io/flux/internal/cache"
 	"github.com/cuprite-io/flux/internal/compiler"
 	"github.com/cuprite-io/flux/internal/pool"
 	"github.com/cuprite-io/flux/internal/state"
@@ -37,7 +37,7 @@ type Executor struct {
 	compiler    *compiler.Compiler
 	workerPool  *pool.WorkerPool
 	sinkFn      SinkDispatcher
-	scriptCache sync.Map // string -> *compiledVoltScript
+	scriptCache *cache.BoundedCache[string, *compiledVoltScript]
 }
 
 // NewExecutor creates a new Circuit tree Executor.
@@ -46,9 +46,10 @@ func NewExecutor(comp *compiler.Compiler, wp *pool.WorkerPool, sinkFn SinkDispat
 		wp = pool.GetDefaultPool()
 	}
 	return &Executor{
-		compiler:   comp,
-		workerPool: wp,
-		sinkFn:     sinkFn,
+		compiler:    comp,
+		workerPool:  wp,
+		sinkFn:      sinkFn,
+		scriptCache: cache.NewBoundedCache[string, *compiledVoltScript](4096),
 	}
 }
 
@@ -144,7 +145,10 @@ func (e *Executor) executeNode(ctx context.Context, node *types.Node, sctx *stat
 	for i, child := range node.Children {
 		childIdx := i
 		childNode := child
-		childBit := (nodeBit << uint(childIdx+1))
+		var childBit uint64
+		if childIdx < 62 {
+			childBit = (nodeBit << uint(childIdx+1))
+		}
 		if childBit == 0 {
 			childBit = uint64(1 << (childIdx % 64))
 		}
@@ -169,12 +173,12 @@ func (e *Executor) executeNode(ctx context.Context, node *types.Node, sctx *stat
 }
 
 func (e *Executor) getOrCompileScript(script string) (*compiledVoltScript, error) {
-	if v, ok := e.scriptCache.Load(script); ok {
-		return v.(*compiledVoltScript), nil
+	if v, ok := e.scriptCache.Get(script); ok {
+		return v, nil
 	}
 
 	compiled := &compiledVoltScript{}
-	setStatements := extractSetStatements(script)
+	setStatements, remainder := extractSetStatementsAndRemainder(script)
 	if len(setStatements) > 0 {
 		for _, stmt := range setStatements {
 			p, err := e.compiler.Compile(stmt.expr)
@@ -187,14 +191,17 @@ func (e *Executor) getOrCompileScript(script string) (*compiledVoltScript, error
 			})
 		}
 	}
-	p, err := e.compiler.Compile(script)
-	if err != nil {
-		return nil, err
+
+	if remainder != "" {
+		p, err := e.compiler.Compile(remainder)
+		if err != nil {
+			return nil, err
+		}
+		compiled.mainProg = p
 	}
-	compiled.mainProg = p
 
 	actual, _ := e.scriptCache.LoadOrStore(script, compiled)
-	return actual.(*compiledVoltScript), nil
+	return actual, nil
 }
 
 // executeStep executes a single StepDefinition within a node.
@@ -236,7 +243,7 @@ func (e *Executor) executeStep(ctx context.Context, step *types.StepDefinition, 
 		}
 		if e.sinkFn != nil && step.SinkName != "" {
 			var payload any
-			if step.Payload != "" && step.Payload != "kafka_sink" && step.Payload != "http_sink" && step.Payload != "webhook" {
+			if step.Payload != "" {
 				if val, found := sctx.Get(step.Payload); found {
 					payload = val
 				} else if m, ok := sctx.OriginalInput.(map[string]any); ok {
@@ -323,15 +330,30 @@ type setStmt struct {
 	expr string
 }
 
-func extractSetStatements(script string) []setStmt {
+func isTrivialRemainder(s string) bool {
+	cleaned := strings.ReplaceAll(s, "true", "")
+	cleaned = strings.ReplaceAll(cleaned, "TRUE", "")
+	cleaned = strings.ReplaceAll(cleaned, "(", "")
+	cleaned = strings.ReplaceAll(cleaned, ")", "")
+	cleaned = strings.ReplaceAll(cleaned, "&", "")
+	cleaned = strings.TrimSpace(cleaned)
+	return cleaned == ""
+}
+
+func extractSetStatementsAndRemainder(script string) ([]setStmt, string) {
 	var stmts []setStmt
 	idx := 0
+	var sb strings.Builder
+	lastEnd := 0
+
 	for {
 		pos := strings.Index(script[idx:], "set(")
 		if pos == -1 {
 			break
 		}
-		start := idx + pos + 4
+		callStart := idx + pos
+		start := callStart + 4
+
 		// Find comma
 		commaPos := -1
 		quoteChar := byte(0)
@@ -393,10 +415,27 @@ func extractSetStatements(script string) []setStmt {
 		if exprEnd != -1 {
 			exprPart := strings.TrimSpace(script[commaPos+1 : exprEnd])
 			stmts = append(stmts, setStmt{key: keyPart, expr: exprPart})
+
+			// Append slice before set(...) call
+			sb.WriteString(script[lastEnd:callStart])
+			// Replace set(...) call with true in remainder
+			sb.WriteString("true")
+
+			lastEnd = exprEnd + 1
 			idx = exprEnd + 1
 		} else {
 			idx = commaPos + 1
 		}
 	}
-	return stmts
+
+	if len(stmts) == 0 {
+		return nil, script
+	}
+
+	sb.WriteString(script[lastEnd:])
+	remainder := strings.TrimSpace(sb.String())
+	if isTrivialRemainder(remainder) {
+		remainder = ""
+	}
+	return stmts, remainder
 }

@@ -32,13 +32,17 @@ type SinkStepBuilder struct {
 	step *types.StepDefinition
 }
 
-// Sink creates a fluent builder for a named StepSink.
-func Sink(name string, sinkType string) *SinkStepBuilder {
+// Sink creates a fluent builder for a named StepSink with an optional sinkType descriptor.
+func Sink(name string, sinkType ...string) *SinkStepBuilder {
+	st := ""
+	if len(sinkType) > 0 {
+		st = sinkType[0]
+	}
 	return &SinkStepBuilder{
 		step: &types.StepDefinition{
 			Type:     types.StepSink,
 			SinkName: name,
-			Payload:  sinkType,
+			SinkType: st,
 		},
 	}
 }
@@ -49,9 +53,9 @@ func (b *SinkStepBuilder) WithCondition(cond string) *SinkStepBuilder {
 	return b
 }
 
-// WithPayload sets the projected payload key or descriptor.
-func (b *SinkStepBuilder) WithPayload(payload string) *SinkStepBuilder {
-	b.step.Payload = payload
+// WithPayload sets the projected state key to dispatch as payload.
+func (b *SinkStepBuilder) WithPayload(payloadKey string) *SinkStepBuilder {
+	b.step.Payload = payloadKey
 	return b
 }
 

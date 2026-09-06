@@ -7,19 +7,20 @@ import (
 	"sync"
 	"sync/atomic"
 
+	"github.com/cuprite-io/flux/internal/cache"
 	"github.com/cuprite-io/flux/internal/vm"
 	"github.com/cuprite-io/flux/types"
 	"github.com/google/cel-go/interpreter"
 )
 
-var structTypeCache sync.Map // reflect.Type -> map[string]int
+var structTypeCache = cache.NewBoundedCache[reflect.Type, map[string]int](2048)
 
 func getStructFieldIndexes(t reflect.Type) map[string]int {
 	if t.Kind() == reflect.Ptr {
 		t = t.Elem()
 	}
-	if v, ok := structTypeCache.Load(t); ok {
-		return v.(map[string]int)
+	if v, ok := structTypeCache.Get(t); ok {
+		return v
 	}
 
 	m := make(map[string]int, t.NumField())
@@ -38,7 +39,7 @@ func getStructFieldIndexes(t reflect.Type) map[string]int {
 			}
 		}
 	}
-	structTypeCache.Store(t, m)
+	structTypeCache.Set(t, m)
 	return m
 }
 
@@ -283,7 +284,11 @@ func (c *Context) ResolveName(name string) (any, bool) {
 		return map[string]any{}, true
 	}
 	if name == "state" {
-		return c.scratchpad, true
+		snap := make(map[string]any, len(c.scratchpad))
+		for k, v := range c.scratchpad {
+			snap[k] = v
+		}
+		return snap, true
 	}
 	if name == "item" {
 		if c.SecondaryInput != nil {
@@ -341,12 +346,16 @@ func (c *Context) Snapshot() map[string]any {
 	if m, isMap := c.OriginalInput.(map[string]any); isMap {
 		res["payload"] = m
 		res["user"] = m
+		res["entity"] = m
+		res["context"] = m
 		for k, v := range m {
 			res[k] = v
 		}
 	} else if c.OriginalInput != nil {
 		res["payload"] = c.OriginalInput
 		res["user"] = c.OriginalInput
+		res["entity"] = c.OriginalInput
+		res["context"] = c.OriginalInput
 		v := reflect.ValueOf(c.OriginalInput)
 		if v.Kind() == reflect.Ptr {
 			if !v.IsNil() {
@@ -366,9 +375,12 @@ func (c *Context) Snapshot() map[string]any {
 			res[k] = v
 		}
 	}
+	stateMap := make(map[string]any, len(c.scratchpad))
 	for k, v := range c.scratchpad {
 		res[k] = v
+		stateMap[k] = v
 	}
+	res["state"] = stateMap
 	return res
 }
 
