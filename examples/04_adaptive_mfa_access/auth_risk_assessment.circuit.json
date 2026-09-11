@@ -1,0 +1,80 @@
+{
+  "id": "adaptive_auth_risk_pipeline",
+  "tags": ["stream:auth", "stream:access_control"],
+  "root": {
+    "name": "auth_event_ingress",
+    "steps": [
+      {
+        "type": "volt",
+        "script": "set('masked_email', mask.email(payload.email)) && set('asn_type', payload.asn_type) && set('recent_fails', window.count('auth:failed:' + payload.user_id, '5m')) && set('ip_velocity', window.count('auth:ip_rate:' + payload.ip, '1m')) && set('risk_score', (payload.is_known_device ? 5.0 : 25.0) + (payload.asn_type == 'TOR_EXIT' || payload.asn_type == 'DATACENTER' ? 40.0 : (payload.asn_type == 'COMMERCIAL_VPN' ? 20.0 : 0.0)) + (payload.client_header_anomaly ? 25.0 : 0.0) + (state.ip_velocity >= 10.0 ? 30.0 : (state.ip_velocity >= 4.0 ? 15.0 : 0.0)) + (state.recent_fails >= 3.0 ? 30.0 : (state.recent_fails >= 1.0 ? 10.0 : 0.0)))"
+      },
+      {
+        "type": "sink",
+        "sink": "user_security_state_sink"
+      }
+    ],
+    "children": [
+      {
+        "name": "critical_threat_branch",
+        "condition": "state.risk_score >= 80.0 || (payload.asn_type == 'TOR_EXIT' && state.ip_velocity >= 5.0)",
+        "steps": [
+          {
+            "type": "sink",
+            "sink": "soc_security_incident"
+          },
+          {
+            "type": "return",
+            "data": {
+              "status": "CHALLENGE_REQUIRED",
+              "action": "LOCKOUT_OR_FIDO2_HARDWARE_TOKEN_REQUIRED",
+              "risk_level": "CRITICAL",
+              "risk_score": "$risk_score",
+              "asn_type": "$asn_type",
+              "ip_velocity_1m": "$ip_velocity",
+              "recent_failed_logins": "$recent_fails",
+              "user_email": "$masked_email"
+            }
+          }
+        ]
+      },
+      {
+        "name": "elevated_risk_branch",
+        "condition": "state.risk_score >= 40.0 && state.risk_score < 80.0 && !(payload.asn_type == 'TOR_EXIT' && state.ip_velocity >= 5.0)",
+        "steps": [
+          {
+            "type": "return",
+            "data": {
+              "status": "CHALLENGE_REQUIRED",
+              "action": "STEP_UP_BIOMETRIC_OR_TOTP_REQUIRED",
+              "risk_level": "ELEVATED",
+              "risk_score": "$risk_score",
+              "asn_type": "$asn_type",
+              "ip_velocity_1m": "$ip_velocity",
+              "recent_failed_logins": "$recent_fails",
+              "user_email": "$masked_email"
+            }
+          }
+        ]
+      },
+      {
+        "name": "low_risk_baseline_branch",
+        "condition": "state.risk_score < 40.0 && !(payload.asn_type == 'TOR_EXIT' && state.ip_velocity >= 5.0)",
+        "steps": [
+          {
+            "type": "return",
+            "data": {
+              "status": "PASSED",
+              "action": "SEAMLESS_ACCESS_GRANTED",
+              "risk_level": "LOW",
+              "risk_score": "$risk_score",
+              "asn_type": "$asn_type",
+              "ip_velocity_1m": "$ip_velocity",
+              "recent_failed_logins": "$recent_fails",
+              "user_email": "$masked_email"
+            }
+          }
+        ]
+      }
+    ]
+  }
+}

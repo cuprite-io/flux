@@ -17,6 +17,8 @@ const (
 	StepReturn
 	// StepAbort explicitly aborts Circuit execution and marks the result as rejected/halted.
 	StepAbort
+	// StepVM executes a pre-compiled native FluxVM *vm.Program.
+	StepVM
 )
 
 // String returns the human-readable name of the StepType.
@@ -30,6 +32,8 @@ func (st StepType) String() string {
 		return "RETURN"
 	case StepAbort:
 		return "ABORT"
+	case StepVM:
+		return "VM"
 	default:
 		return "UNKNOWN"
 	}
@@ -44,6 +48,7 @@ type StepDefinition struct {
 	Condition string         `json:"condition,omitempty"`
 	Payload   string         `json:"payload,omitempty"`
 	ReturnMap map[string]any `json:"data,omitempty"`
+	Program   any            `json:"-"`
 }
 
 // Node represents a node in a hierarchical Circuit execution tree.

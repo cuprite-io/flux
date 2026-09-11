@@ -10,6 +10,7 @@ import (
 	"github.com/cuprite-io/flux/internal/compiler"
 	"github.com/cuprite-io/flux/internal/pool"
 	"github.com/cuprite-io/flux/internal/state"
+	"github.com/cuprite-io/flux/internal/vm"
 	"github.com/cuprite-io/flux/types"
 	"github.com/google/cel-go/cel"
 	celtypes "github.com/google/cel-go/common/types"
@@ -87,6 +88,9 @@ func (e *Executor) ExecuteCircuit(ctx context.Context, circuit *types.Circuit, s
 
 // executeNode evaluates a node's condition, executes its sequential steps, and dispatches children.
 func (e *Executor) executeNode(ctx context.Context, node *types.Node, sctx *state.Context, nodeBit uint64) {
+	gid := compiler.SetCurrentContext(ctx)
+	defer compiler.ClearCurrentContext(gid)
+
 	if ctx.Err() != nil {
 		sctx.Abort()
 		return
@@ -218,7 +222,7 @@ func (e *Executor) executeStep(ctx context.Context, step *types.StepDefinition, 
 
 		if len(compiled.setStatements) > 0 {
 			for _, stmt := range compiled.setStatements {
-				out, _, errEval := stmt.prog.Eval(sctx)
+				out, _, errEval := stmt.prog.ContextEval(ctx, sctx)
 				if errEval != nil {
 					return fmt.Errorf("set %s: %w", stmt.key, errEval)
 				}
@@ -229,8 +233,24 @@ func (e *Executor) executeStep(ctx context.Context, step *types.StepDefinition, 
 		}
 
 		if compiled.mainProg != nil {
-			_, _, err = compiled.mainProg.Eval(sctx)
-			return err
+			out, _, err := compiled.mainProg.ContextEval(ctx, sctx)
+			if err != nil {
+				return err
+			}
+			if out == celtypes.False || (out != nil && out.Value() == false) {
+				sctx.Abort()
+			}
+			return nil
+		}
+		return nil
+
+	case types.StepVM:
+		if prog, ok := step.Program.(*vm.Program); ok && prog != nil {
+			arena := vm.AcquireFrame()
+			defer vm.ReleaseFrame(arena)
+			adapter := &state.VMContextAdapter{Ctx: sctx}
+			_, errVM := vm.Run(prog, arena, adapter)
+			return errVM
 		}
 		return nil
 
@@ -309,7 +329,7 @@ func (e *Executor) evalCondition(ctx context.Context, expr string, sctx *state.C
 	if err != nil {
 		return false, err
 	}
-	out, _, err := prog.Eval(sctx)
+	out, _, err := prog.ContextEval(ctx, sctx)
 	if err != nil {
 		return false, err
 	}
@@ -330,6 +350,48 @@ type setStmt struct {
 	expr string
 }
 
+func isIdentChar(c byte) bool {
+	return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '_'
+}
+
+func findNextSetCall(script string, fromIdx int) int {
+	inQuote := false
+	var quoteChar byte
+	escaped := false
+
+	for i := fromIdx; i+4 <= len(script); i++ {
+		c := script[i]
+		if inQuote {
+			if escaped {
+				escaped = false
+				continue
+			}
+			if c == '\\' {
+				escaped = true
+				continue
+			}
+			if c == quoteChar {
+				inQuote = false
+			}
+			continue
+		}
+
+		if c == '\'' || c == '"' {
+			inQuote = true
+			quoteChar = c
+			escaped = false
+			continue
+		}
+
+		if script[i:i+4] == "set(" {
+			if i == 0 || !isIdentChar(script[i-1]) {
+				return i
+			}
+		}
+	}
+	return -1
+}
+
 func isTrivialRemainder(s string) bool {
 	cleaned := strings.ReplaceAll(s, "true", "")
 	cleaned = strings.ReplaceAll(cleaned, "TRUE", "")
@@ -347,30 +409,41 @@ func extractSetStatementsAndRemainder(script string) ([]setStmt, string) {
 	lastEnd := 0
 
 	for {
-		pos := strings.Index(script[idx:], "set(")
-		if pos == -1 {
+		callStart := findNextSetCall(script, idx)
+		if callStart == -1 {
 			break
 		}
-		callStart := idx + pos
 		start := callStart + 4
 
 		// Find comma
 		commaPos := -1
 		quoteChar := byte(0)
 		inQuote := false
+		escaped := false
 
 		for i := start; i < len(script); i++ {
 			c := script[i]
-			if !inQuote && (c == '\'' || c == '"') {
+			if inQuote {
+				if escaped {
+					escaped = false
+					continue
+				}
+				if c == '\\' {
+					escaped = true
+					continue
+				}
+				if c == quoteChar {
+					inQuote = false
+				}
+				continue
+			}
+			if c == '\'' || c == '"' {
 				inQuote = true
 				quoteChar = c
+				escaped = false
 				continue
 			}
-			if inQuote && c == quoteChar {
-				inQuote = false
-				continue
-			}
-			if !inQuote && c == ',' {
+			if c == ',' {
 				commaPos = i
 				break
 			}
@@ -388,26 +461,36 @@ func extractSetStatementsAndRemainder(script string) ([]setStmt, string) {
 		parenCount := 1
 		exprEnd := -1
 		inQuote = false
+		escaped = false
 		for i := commaPos + 1; i < len(script); i++ {
 			c := script[i]
-			if !inQuote && (c == '\'' || c == '"') {
+			if inQuote {
+				if escaped {
+					escaped = false
+					continue
+				}
+				if c == '\\' {
+					escaped = true
+					continue
+				}
+				if c == quoteChar {
+					inQuote = false
+				}
+				continue
+			}
+			if c == '\'' || c == '"' {
 				inQuote = true
 				quoteChar = c
+				escaped = false
 				continue
 			}
-			if inQuote && c == quoteChar {
-				inQuote = false
-				continue
-			}
-			if !inQuote {
-				if c == '(' {
-					parenCount++
-				} else if c == ')' {
-					parenCount--
-					if parenCount == 0 {
-						exprEnd = i
-						break
-					}
+			if c == '(' {
+				parenCount++
+			} else if c == ')' {
+				parenCount--
+				if parenCount == 0 {
+					exprEnd = i
+					break
 				}
 			}
 		}

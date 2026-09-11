@@ -16,6 +16,7 @@ type rawStep struct {
 	Type      string         `json:"type" yaml:"type"`
 	Script    string         `json:"script,omitempty" yaml:"script,omitempty"`
 	SinkName  string         `json:"sink,omitempty" yaml:"sink,omitempty"`
+	SinkType  string         `json:"sink_type,omitempty" yaml:"sink_type,omitempty"`
 	Condition string         `json:"condition,omitempty" yaml:"condition,omitempty"`
 	Payload   string         `json:"payload,omitempty" yaml:"payload,omitempty"`
 	ReturnMap map[string]any `json:"data,omitempty" yaml:"data,omitempty"`
@@ -54,6 +55,8 @@ func parseStepType(t string) (types.StepType, error) {
 		return types.StepReturn, nil
 	case "abort", "stepabort":
 		return types.StepAbort, nil
+	case "vm", "stepvm":
+		return types.StepVM, nil
 	default:
 		return 0, fmt.Errorf("unknown step type %q", t)
 	}
@@ -76,6 +79,7 @@ func convertNode(rn *rawNode) (*types.Node, error) {
 			Type:      st,
 			Script:    rs.Script,
 			SinkName:  rs.SinkName,
+			SinkType:  rs.SinkType,
 			Condition: rs.Condition,
 			Payload:   rs.Payload,
 			ReturnMap: rs.ReturnMap,

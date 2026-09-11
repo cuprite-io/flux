@@ -9,6 +9,7 @@ import (
 	"github.com/cuprite-io/flux/internal/engine"
 	"github.com/cuprite-io/flux/internal/pool"
 	"github.com/cuprite-io/flux/internal/state"
+	"github.com/cuprite-io/flux/internal/vm"
 	"github.com/cuprite-io/flux/types"
 )
 
@@ -107,6 +108,98 @@ func TestEngine_DeeplyNestedPruning(t *testing.T) {
 	}
 	if !res.Passed {
 		t.Errorf("circuit should pass cleanly with pruned nodes")
+	}
+}
+
+func TestEngine_StepVM_NativeExecution(t *testing.T) {
+	comp, _ := compiler.NewCompiler(nil)
+	exec := engine.NewExecutor(comp, pool.GetDefaultPool(), nil)
+
+	// Construct native VM program that loads 42 into R0 and writes to state key "score"
+	// OpLoadK R0, Aux 0 (42) -> OpSetState R0, Aux 0 ("score")
+	prog := &vm.Program{
+		Constants: []vm.Value{vm.NewInt64(42)},
+		Steps: []vm.Step{
+			{Op: vm.OpLoadK, OutReg: 0, AuxIdx: 0},
+			{Op: vm.OpStateSet, InRegs: [3]uint8{0, 0, 0}, AuxIdx: 0},
+		},
+		StringTable: []string{"score"},
+	}
+
+	root := types.NewNode("vm_node").
+		Step(&types.StepDefinition{
+			Type:    types.StepVM,
+			Program: prog,
+		})
+
+	circuit := types.NewCircuit("vm_circuit").WithRoot(root)
+	sctx := state.NewContext(context.Background(), map[string]any{"amount": 100.0})
+
+	res, err := exec.ExecuteCircuit(context.Background(), circuit, sctx)
+	if err != nil {
+		t.Fatalf("execute failed: %v", err)
+	}
+	if !res.Passed {
+		t.Fatalf("expected circuit to pass")
+	}
+	val, ok := sctx.Get("score")
+	if !ok || val != int64(42) {
+		t.Errorf("expected score 42 in state, got %v", val)
+	}
+}
+
+func TestEngine_VoltRemainder_Gating(t *testing.T) {
+	comp, _ := compiler.NewCompiler(nil)
+	exec := engine.NewExecutor(comp, pool.GetDefaultPool(), nil)
+
+	// Volt step where remainder evaluates to false -> should abort
+	root := types.NewNode("guard_node").
+		Step(&types.StepDefinition{
+			Type:   types.StepVolt,
+			Script: `set('x', 1) && payload.amount > 100.0`,
+		})
+
+	circuit := types.NewCircuit("guard_circuit").WithRoot(root)
+
+	// Case 1: amount = 50 -> remainder is false -> circuit aborted
+	sctx := state.NewContext(context.Background(), map[string]any{"amount": 50.0})
+	res, err := exec.ExecuteCircuit(context.Background(), circuit, sctx)
+	if err != engine.ErrCircuitAborted || res.Passed {
+		t.Errorf("expected circuit to be aborted when remainder is false, got err: %v, passed: %v", err, res.Passed)
+	}
+	// 'x' was set before the false remainder
+	if v, ok := sctx.Get("x"); !ok || v != int64(1) {
+		t.Errorf("expected x=1 in state, got %v", v)
+	}
+
+	// Case 2: amount = 150 -> remainder is true -> circuit passes
+	sctx2 := state.NewContext(context.Background(), map[string]any{"amount": 150.0})
+	res2, err2 := exec.ExecuteCircuit(context.Background(), circuit, sctx2)
+	if err2 != nil || !res2.Passed {
+		t.Errorf("expected circuit to pass when remainder is true, got err: %v", err2)
+	}
+}
+
+func TestEngine_StringLiteralAwareSet(t *testing.T) {
+	comp, _ := compiler.NewCompiler(nil)
+	exec := engine.NewExecutor(comp, pool.GetDefaultPool(), nil)
+
+	root := types.NewNode("string_literal_node").
+		Step(&types.StepDefinition{
+			Type:   types.StepVolt,
+			Script: `payload.msg == "set(" && set('parsed_key', 99)`,
+		})
+
+	circuit := types.NewCircuit("string_circuit").WithRoot(root)
+
+	sctx := state.NewContext(context.Background(), map[string]any{"msg": "set("})
+	res, err := exec.ExecuteCircuit(context.Background(), circuit, sctx)
+	if err != nil || !res.Passed {
+		t.Fatalf("expected circuit to pass, got err: %v", err)
+	}
+
+	if v, ok := sctx.Get("parsed_key"); !ok || v != int64(99) {
+		t.Errorf("expected parsed_key=99 in state, got %v", v)
 	}
 }
 

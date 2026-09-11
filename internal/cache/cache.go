@@ -350,12 +350,15 @@ func formatMember(m any) string {
 	}
 }
 
-// BoundedCache provides a thread-safe, bounded in-memory cache with FIFO eviction.
+// BoundedCache provides a thread-safe, bounded in-memory cache with O(1) FIFO eviction using a ring buffer.
 type BoundedCache[K comparable, V any] struct {
 	mu       sync.RWMutex
 	capacity int
 	items    map[K]V
-	keys     []K
+	ring     []K
+	head     int
+	tail     int
+	size     int
 }
 
 // NewBoundedCache initializes a BoundedCache with a maximum capacity.
@@ -366,7 +369,10 @@ func NewBoundedCache[K comparable, V any](capacity int) *BoundedCache[K, V] {
 	return &BoundedCache[K, V]{
 		capacity: capacity,
 		items:    make(map[K]V, capacity),
-		keys:     make([]K, 0, capacity),
+		ring:     make([]K, capacity),
+		head:     0,
+		tail:     0,
+		size:     0,
 	}
 }
 
@@ -378,7 +384,7 @@ func (c *BoundedCache[K, V]) Get(key K) (V, bool) {
 	return val, ok
 }
 
-// Set stores an item, evicting the oldest item if at capacity.
+// Set stores an item, evicting the oldest item in O(1) time if at capacity.
 func (c *BoundedCache[K, V]) Set(key K, val V) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -388,18 +394,23 @@ func (c *BoundedCache[K, V]) Set(key K, val V) {
 		return
 	}
 
-	if len(c.items) >= c.capacity && len(c.keys) > 0 {
-		oldest := c.keys[0]
-		c.keys = c.keys[1:]
+	if c.size >= c.capacity {
+		oldest := c.ring[c.head]
 		delete(c.items, oldest)
+		var zero K
+		c.ring[c.head] = zero // Clear evicted reference for GC
+		c.head = (c.head + 1) % c.capacity
+		c.size--
 	}
 
 	c.items[key] = val
-	c.keys = append(c.keys, key)
+	c.ring[c.tail] = key
+	c.tail = (c.tail + 1) % c.capacity
+	c.size++
 }
 
 // LoadOrStore returns the existing value for the key if present.
-// Otherwise, it stores and returns the given value.
+// Otherwise, it stores and returns the given value in O(1) time.
 func (c *BoundedCache[K, V]) LoadOrStore(key K, val V) (V, bool) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -408,13 +419,25 @@ func (c *BoundedCache[K, V]) LoadOrStore(key K, val V) (V, bool) {
 		return existing, true
 	}
 
-	if len(c.items) >= c.capacity && len(c.keys) > 0 {
-		oldest := c.keys[0]
-		c.keys = c.keys[1:]
+	if c.size >= c.capacity {
+		oldest := c.ring[c.head]
 		delete(c.items, oldest)
+		var zero K
+		c.ring[c.head] = zero // Clear evicted reference for GC
+		c.head = (c.head + 1) % c.capacity
+		c.size--
 	}
 
 	c.items[key] = val
-	c.keys = append(c.keys, key)
+	c.ring[c.tail] = key
+	c.tail = (c.tail + 1) % c.capacity
+	c.size++
 	return val, false
+}
+
+// Len returns the current count of items in the cache.
+func (c *BoundedCache[K, V]) Len() int {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return len(c.items)
 }

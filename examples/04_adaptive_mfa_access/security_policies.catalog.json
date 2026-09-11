@@ -1,0 +1,157 @@
+[
+  {
+    "id": "policy_fido2_hardware_key",
+    "category": "auth:mfa_methods",
+    "tags": ["auth:mfa_methods", "security:highest"],
+    "data": {
+      "method_name": "FIDO2 / WebAuthn Hardware Security Key",
+      "assurance_level": "AAL3",
+      "friction": "HIGH",
+      "supported_transports": ["USB-C", "NFC"]
+    },
+    "circuit": {
+      "id": "fido2_qualify_circuit",
+      "root": {
+        "name": "check_fido2_eligibility",
+        "condition": "user.risk_score >= 40.0",
+        "steps": [
+          {
+            "type": "volt",
+            "script": "set('session_validity_minutes', user.risk_score >= 80.0 ? 15.0 : 60.0)"
+          },
+          {
+            "type": "return",
+            "data": {
+              "method": "FIDO2_HARDWARE_KEY",
+              "action": "PROMPT_HARDWARE_TOUCH",
+              "allowed": true,
+              "max_session_duration_minutes": "$session_validity_minutes",
+              "requires_pin": true,
+              "reason": "HIGH_ASSURANCE_REQUIRED_FOR_ELEVATED_RISK"
+            }
+          }
+        ]
+      }
+    }
+  },
+  {
+    "id": "policy_totp_authenticator_app",
+    "category": "auth:mfa_methods",
+    "tags": ["auth:mfa_methods", "security:medium"],
+    "data": {
+      "method_name": "TOTP Software Authenticator (Google / Microsoft Authenticator)",
+      "assurance_level": "AAL2",
+      "friction": "MEDIUM",
+      "algorithm": "SHA1-6DIGIT-30S"
+    },
+    "circuit": {
+      "id": "totp_qualify_circuit",
+      "root": {
+        "name": "check_totp_eligibility",
+        "condition": "user.risk_score >= 30.0 && user.risk_score < 80.0",
+        "steps": [
+          {
+            "type": "return",
+            "data": {
+              "method": "TOTP_AUTHENTICATOR",
+              "action": "ENTER_6_DIGIT_CODE",
+              "allowed": true,
+              "max_session_duration_minutes": 240.0,
+              "reason": "STANDARD_STEP_UP_CHALLENGE"
+            }
+          }
+        ]
+      }
+    }
+  },
+  {
+    "id": "policy_biometric_platform",
+    "category": "auth:mfa_methods",
+    "tags": ["auth:mfa_methods", "security:medium_high"],
+    "data": {
+      "method_name": "Platform Biometrics (TouchID / FaceID / Windows Hello)",
+      "assurance_level": "AAL2",
+      "friction": "LOW",
+      "biometric_types": ["FINGERPRINT", "FACE_SCAN"]
+    },
+    "circuit": {
+      "id": "biometric_qualify_circuit",
+      "root": {
+        "name": "check_biometric_eligibility",
+        "condition": "user.is_known_device == true && user.risk_score < 80.0",
+        "steps": [
+          {
+            "type": "return",
+            "data": {
+              "method": "PLATFORM_BIOMETRICS",
+              "action": "SCAN_BIOMETRIC",
+              "allowed": true,
+              "max_session_duration_minutes": 480.0,
+              "reason": "SEAMLESS_KNOWN_DEVICE_BIOMETRIC"
+            }
+          }
+        ]
+      }
+    }
+  },
+  {
+    "id": "policy_seamless_fastpath",
+    "category": "auth:mfa_methods",
+    "tags": ["auth:mfa_methods", "security:baseline"],
+    "data": {
+      "method_name": "Seamless Risk-Free FastPath Bypass",
+      "assurance_level": "AAL1",
+      "friction": "NONE",
+      "auto_approve": true
+    },
+    "circuit": {
+      "id": "fastpath_qualify_circuit",
+      "root": {
+        "name": "check_fastpath_eligibility",
+        "condition": "user.risk_score < 40.0 && user.is_known_device == true",
+        "steps": [
+          {
+            "type": "return",
+            "data": {
+              "method": "SEAMLESS_FASTPATH",
+              "action": "BYPASS_MFA",
+              "allowed": true,
+              "max_session_duration_minutes": 720.0,
+              "reason": "TRUSTED_DEVICE_AND_LOW_RISK_PROFILE"
+            }
+          }
+        ]
+      }
+    }
+  },
+  {
+    "id": "policy_sms_otp_deprecated",
+    "category": "auth:mfa_methods",
+    "tags": ["auth:mfa_methods", "security:low"],
+    "data": {
+      "method_name": "SMS One-Time Code",
+      "assurance_level": "AAL1",
+      "friction": "MEDIUM",
+      "carrier_lookup": true
+    },
+    "circuit": {
+      "id": "sms_qualify_circuit",
+      "root": {
+        "name": "check_sms_eligibility",
+        "condition": "user.risk_score < 25.0 && user.is_known_device == true",
+        "steps": [
+          {
+            "type": "return",
+            "data": {
+              "method": "SMS_OTP",
+              "action": "ENTER_SMS_CODE",
+              "allowed": true,
+              "max_session_duration_minutes": 60.0,
+              "warning": "SMS_IS_VULNERABLE_TO_SIM_SWAPPING"
+            }
+          }
+        ]
+      }
+    }
+  }
+]

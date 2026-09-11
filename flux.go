@@ -260,7 +260,7 @@ func (e *Engine) Conduct(ctx context.Context, req *types.ConductRequest) (*types
 
 			// Ineligible / aborted items are SILENTLY OMITTED
 			// If root node was pruned (condition failed) or execution aborted -> omit
-			if err != nil || !res.Passed || sctx.IsAborted() || sctx.IsPruned(1<<0) {
+			if err != nil || res == nil || !res.Passed || sctx.IsAborted() || sctx.IsPruned(1<<0) {
 				state.ReleaseContext(sctx)
 				return
 			}

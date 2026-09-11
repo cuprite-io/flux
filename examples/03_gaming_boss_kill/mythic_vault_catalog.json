@@ -1,0 +1,154 @@
+[
+  {
+    "id": "titanforged_thunderfury",
+    "category": "catalog:mythic_vault",
+    "tags": ["catalog:mythic_vault", "weapons:mythic"],
+    "data": {
+      "name": "Thunderfury, Blessed Blade of the Windseeker",
+      "base_price": 15000.0,
+      "rarity": "MYTHIC_ARTIFACT"
+    },
+    "circuit": {
+      "id": "thunderfury_qualify",
+      "root": {
+        "name": "check_mythic_warrior",
+        "condition": "user.level >= 60.0 && user.boss_kills >= 1.0 && user.class == 'WARRIOR'",
+        "steps": [
+          {
+            "type": "volt",
+            "script": "set('vip_discount', user.vip_tier == 'MYTHIC_LEGEND' ? 0.30 : 0.15) && set('final_price', item.base_price * (user.vip_tier == 'MYTHIC_LEGEND' ? 0.70 : 0.85))"
+          },
+          {
+            "type": "return",
+            "data": {
+              "item": "Thunderfury, Blessed Blade of the Windseeker",
+              "final_price": "$final_price",
+              "vip_discount": "$vip_discount",
+              "attack_power": 650.0,
+              "perk": "CHAIN_LIGHTNING_PROC",
+              "status": "CLAIMABLE"
+            }
+          }
+        ]
+      }
+    }
+  },
+  {
+    "id": "celestial_phoenix_mount",
+    "category": "catalog:mythic_vault",
+    "tags": ["catalog:mythic_vault", "mounts:legendary"],
+    "data": {
+      "name": "Ashes of Al'ar (Celestial Phoenix Mount)",
+      "base_price": 20000.0,
+      "rarity": "LEGENDARY_MOUNT"
+    },
+    "circuit": {
+      "id": "phoenix_mount_qualify",
+      "root": {
+        "name": "check_mythic_vip",
+        "condition": "user.vip_tier == 'MYTHIC_LEGEND' && user.boss_kills >= 1.0",
+        "steps": [
+          {
+            "type": "volt",
+            "script": "set('final_price', item.base_price * 0.75)"
+          },
+          {
+            "type": "return",
+            "data": {
+              "item": "Ashes of Al'ar (Celestial Phoenix Mount)",
+              "final_price": "$final_price",
+              "mount_speed": 350.0,
+              "prestige_title": "Lord of the Skies",
+              "status": "CLAIMABLE"
+            }
+          }
+        ]
+      }
+    }
+  },
+  {
+    "id": "crown_of_the_immortals",
+    "category": "catalog:mythic_vault",
+    "tags": ["catalog:mythic_vault", "armor:mythic_helm"],
+    "data": {
+      "name": "Crown of the Immortals",
+      "base_price": 8500.0,
+      "rarity": "MYTHIC_HELM"
+    },
+    "circuit": {
+      "id": "crown_immortals_qualify",
+      "root": {
+        "name": "check_gear_and_level",
+        "condition": "user.gear_score >= 600.0 && user.level >= 60.0",
+        "steps": [
+          {
+            "type": "volt",
+            "script": "set('final_price', item.base_price * 0.80)"
+          },
+          {
+            "type": "return",
+            "data": {
+              "item": "Crown of the Immortals",
+              "final_price": "$final_price",
+              "bonus_armor": 420.0,
+              "perk": "DIVINE_RESURRECTION",
+              "status": "CLAIMABLE"
+            }
+          }
+        ]
+      }
+    }
+  },
+  {
+    "id": "worldbreaker_annihilator",
+    "category": "catalog:mythic_vault",
+    "tags": ["catalog:mythic_vault", "weapons:cosmic"],
+    "data": {
+      "name": "Worldbreaker Annihilator",
+      "base_price": 50000.0,
+      "rarity": "COSMIC_TITAN"
+    },
+    "circuit": {
+      "id": "worldbreaker_qualify",
+      "root": {
+        "name": "check_veteran_raid_kills",
+        "condition": "user.boss_kills >= 10.0",
+        "steps": [
+          {
+            "type": "return",
+            "data": {
+              "item": "Worldbreaker Annihilator",
+              "status": "LOCKED"
+            }
+          }
+        ]
+      }
+    }
+  },
+  {
+    "id": "archmage_eternal_robes",
+    "category": "catalog:mythic_vault",
+    "tags": ["catalog:mythic_vault", "armor:cloth"],
+    "data": {
+      "name": "Eternal Archmage Robes",
+      "base_price": 12000.0,
+      "rarity": "MYTHIC_CLOTH"
+    },
+    "circuit": {
+      "id": "archmage_robes_qualify",
+      "root": {
+        "name": "check_mage_mythic",
+        "condition": "user.class == 'MAGE' && user.level >= 60.0",
+        "steps": [
+          {
+            "type": "return",
+            "data": {
+              "item": "Eternal Archmage Robes",
+              "status": "LOCKED"
+            }
+          }
+        ]
+      }
+    }
+  }
+]

@@ -11,7 +11,8 @@
           {
             "type": "sink",
             "sink": "incident_response_webhook",
-            "payload": "CRITICAL_ANOMALY_VECTOR"
+            "sink_type": "incident_vector",
+            "payload": "payload"
           },
           {
             "type": "return",
@@ -34,7 +35,8 @@
           {
             "type": "sink",
             "sink": "kafka_cleared_payments",
-            "payload": "CLEARED_PAYMENT"
+            "sink_type": "cleared_event",
+            "payload": "payload"
           },
           {
             "type": "return",

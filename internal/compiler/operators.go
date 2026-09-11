@@ -39,14 +39,6 @@ type CacheAccessor interface {
 
 // --- 1. DAG State & Maps ---
 
-func OpSet(state map[string]any, key string, val any) bool {
-	if state != nil && key != "" {
-		state[key] = val
-		return true
-	}
-	return false
-}
-
 func OpGet(state map[string]any, key string, fallback any) any {
 	if state != nil {
 		if v, ok := state[key]; ok {
@@ -83,7 +75,7 @@ func OpMapDelete(mRaw any, key string) map[string]any {
 	return res
 }
 
-// --- 2. Security, PII & Masking ---
+// --- 2. String Manipulation & PII Masking ---
 
 func OpIsPII(val string) bool {
 	return emailRegex.MatchString(val) ||
@@ -123,8 +115,9 @@ func OpMask(val, maskType string) string {
 
 // --- 3. Cryptography & Hashing ---
 
-// deriveAESGCMKey derives a 256-bit AES key using domain-separated HMAC-SHA256.
-// Note: For slow password hashing in user credential authentication, use Argon2id/scrypt upstream.
+// deriveAESGCMKey derives a 256-bit AES key using domain-separated HMAC-SHA256 with a static salt.
+// Note: This is a fast, deterministic symmetric key expansion function suitable for stream-level encryption keys,
+// not a slow/memory-hard password KDF (e.g. Argon2id, scrypt, or bcrypt). For user credential hashing, use a slow KDF upstream.
 func deriveAESGCMKey(key string) []byte {
 	salt := []byte("flux:aes-gcm:kdf:v1")
 	h := hmac.New(sha256.New, salt)

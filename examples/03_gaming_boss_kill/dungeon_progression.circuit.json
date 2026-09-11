@@ -1,13 +1,13 @@
 {
-  "id": "boss_kill_pipeline",
-  "tags": ["stream:game_events", "stream:boss_events"],
+  "id": "dungeon_progression_pipeline",
+  "tags": ["stream:game_events", "stream:dungeon_events"],
   "root": {
-    "name": "verify_boss_kill",
-    "condition": "payload.damage >= 50000.0 && payload.boss_type == 'MYTHIC_RAID_BOSS'",
+    "name": "verify_dungeon_clear",
+    "condition": "payload.dungeon_cleared == true && payload.mobs_killed >= 10.0",
     "steps": [
       {
         "type": "volt",
-        "script": "set('player_id', payload.player_id) && set('class', payload.class) && set('level', 60.0) && set('gold', 20950.0) && set('gear_score', 620.0) && set('dungeon_clears', 5.0) && set('boss_kills', 1.0) && set('vip_tier', 'MYTHIC_LEGEND') && set('damage', payload.damage)"
+        "script": "set('player_id', payload.player_id) && set('class', payload.class) && set('level', 25.0) && set('gold', 2450.0) && set('gear_score', 280.0) && set('dungeon_clears', 5.0) && set('boss_kills', 0.0) && set('vip_tier', 'BRONZE')"
       },
       {
         "type": "sink",
@@ -16,7 +16,7 @@
     ],
     "children": [
       {
-        "name": "discord_announcement",
+        "name": "dungeon_guild_feed",
         "steps": [
           {
             "type": "sink",
@@ -32,15 +32,14 @@
           {
             "type": "return",
             "data": {
-              "status": "MYTHIC_VICTORY",
-              "boss_slain": "Ignis the Worldburner",
-              "damage_dealt": "$damage",
+              "status": "DUNGEON_CONQUERED",
+              "dungeon_name": "Sunken Catacombs",
               "player_id": "$player_id",
               "promoted_level": "$level",
               "promoted_tier": "$vip_tier",
               "gear_score": "$gear_score",
               "gold_balance": "$gold",
-              "unlocked_vault": "catalog:mythic_vault"
+              "unlocked_armory": "catalog:adventurer_armory"
             }
           }
         ]

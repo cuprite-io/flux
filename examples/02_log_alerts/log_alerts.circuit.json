@@ -1,0 +1,106 @@
+{
+  "id": "production_log_alert_pipeline",
+  "tags": ["stream:logs", "stream:production_logs"],
+  "root": {
+    "name": "log_ingress",
+    "steps": [
+      {
+        "type": "volt",
+        "script": "set('log_level', payload.level) && set('status_code', payload.status_code) && set('service', payload.service)"
+      }
+    ],
+    "children": [
+      {
+        "name": "critical_error_detector",
+        "condition": "payload.level == 'FATAL' || payload.level == 'CRITICAL' || (payload.level == 'ERROR' && (payload.message.contains('DatabaseConnectionError') || payload.message.contains('OutOfMemory') || payload.message.contains('DeadlockDetected')))",
+        "steps": [
+          {
+            "type": "sink",
+            "sink": "pagerduty_alerts",
+            "payload": "payload"
+          },
+          {
+            "type": "return",
+            "data": {
+              "status": "ALERT_TRIGGERED",
+              "alert_type": "CRITICAL_SEVERITY_INCIDENT",
+              "action": "PAGE_ONCALL",
+              "incident_id": "INC-CRIT-911",
+              "service": "$service",
+              "error_message": "payload.message"
+            }
+          }
+        ]
+      },
+      {
+        "name": "http_5xx_rate_evaluator",
+        "condition": "payload.status_code >= 500.0 && payload.level != 'FATAL' && payload.level != 'CRITICAL' && !payload.message.contains('DatabaseConnectionError') && !payload.message.contains('OutOfMemory') && !payload.message.contains('DeadlockDetected')",
+        "steps": [
+          {
+            "type": "volt",
+            "script": "set('error_window_count', window.count('rate:5xx:' + payload.service, '60s'))"
+          }
+        ],
+        "children": [
+          {
+            "name": "error_rate_threshold_exceeded",
+            "condition": "state.error_window_count >= 5.0",
+            "steps": [
+              {
+                "type": "sink",
+                "sink": "slack_devops_alerts",
+                "payload": "payload"
+              },
+              {
+                "type": "return",
+                "data": {
+                  "status": "ALERT_TRIGGERED",
+                  "alert_type": "5XX_RATE_LIMIT_EXCEEDED",
+                  "action": "NOTIFY_SLACK_DEVOPS",
+                  "service": "$service",
+                  "status_code": "$status_code",
+                  "current_error_count_in_window": "$error_window_count",
+                  "threshold": 5.0,
+                  "window": "60s"
+                }
+              }
+            ]
+          },
+          {
+            "name": "error_rate_tolerated_below_threshold",
+            "condition": "state.error_window_count < 5.0",
+            "steps": [
+              {
+                "type": "return",
+                "data": {
+                  "status": "IGNORED_BELOW_THRESHOLD",
+                  "alert_type": "5XX_TRANSIENT_SPIKE",
+                  "action": "RECORD_METRIC_ONLY",
+                  "service": "$service",
+                  "status_code": "$status_code",
+                  "current_error_count_in_window": "$error_window_count",
+                  "threshold": 5.0,
+                  "window": "60s"
+                }
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "name": "healthy_log_baseline",
+        "condition": "payload.status_code < 500.0 && payload.level != 'FATAL' && payload.level != 'CRITICAL' && !payload.message.contains('DatabaseConnectionError') && !payload.message.contains('OutOfMemory') && !payload.message.contains('DeadlockDetected')",
+        "steps": [
+          {
+            "type": "return",
+            "data": {
+              "status": "HEALTHY",
+              "action": "INGEST_NORMAL",
+              "service": "$service"
+            }
+          }
+        ]
+      }
+    ]
+  }
+}

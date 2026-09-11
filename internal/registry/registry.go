@@ -219,11 +219,20 @@ func (r *Registry) Get(ctx context.Context, id string) (*types.Circuit, error) {
 
 	var circuit types.Circuit
 	found, err := r.backend().MapGetScan(ctx, circuitsMapKey, id, &circuit)
-	if err != nil || !found {
-		return nil, ErrCircuitNotFound
+	if err == nil && found {
+		return &circuit, nil
 	}
 
-	return &circuit, nil
+	rawMap, errAll := r.backend().MapGetAll(ctx, circuitsMapKey)
+	if errAll == nil {
+		if raw, ok := rawMap[id]; ok {
+			if errJSON := json.Unmarshal([]byte(raw), &circuit); errJSON == nil {
+				return &circuit, nil
+			}
+		}
+	}
+
+	return nil, ErrCircuitNotFound
 }
 
 // GetMatching retrieves all Circuits that match any of the provided query tags directly from Capacitor.
@@ -246,11 +255,21 @@ func (r *Registry) GetMatching(ctx context.Context, tags ...string) []*types.Cir
 			sort.Strings(ids)
 		}
 		res := make([]*types.Circuit, 0, len(ids))
+		var rawMap map[string]string
 		for _, id := range ids {
 			var c types.Circuit
 			found, err := r.backend().MapGetScan(ctx, circuitsMapKey, id, &c)
 			if err == nil && found {
 				res = append(res, &c)
+			} else {
+				if rawMap == nil {
+					rawMap, _ = r.backend().MapGetAll(ctx, circuitsMapKey)
+				}
+				if raw, ok := rawMap[id]; ok {
+					if errJSON := json.Unmarshal([]byte(raw), &c); errJSON == nil {
+						res = append(res, &c)
+					}
+				}
 			}
 		}
 		return res
@@ -281,11 +300,21 @@ func (r *Registry) GetMatching(ctx context.Context, tags ...string) []*types.Cir
 	sort.Strings(sortedIDs)
 
 	res := make([]*types.Circuit, 0, len(sortedIDs))
+	var rawMap map[string]string
 	for _, id := range sortedIDs {
 		var c types.Circuit
 		found, err := r.backend().MapGetScan(ctx, circuitsMapKey, id, &c)
 		if err == nil && found {
 			res = append(res, &c)
+		} else {
+			if rawMap == nil {
+				rawMap, _ = r.backend().MapGetAll(ctx, circuitsMapKey)
+			}
+			if raw, ok := rawMap[id]; ok {
+				if errJSON := json.Unmarshal([]byte(raw), &c); errJSON == nil {
+					res = append(res, &c)
+				}
+			}
 		}
 	}
 

@@ -284,11 +284,7 @@ func (c *Context) ResolveName(name string) (any, bool) {
 		return map[string]any{}, true
 	}
 	if name == "state" {
-		snap := make(map[string]any, len(c.scratchpad))
-		for k, v := range c.scratchpad {
-			snap[k] = v
-		}
-		return snap, true
+		return c.scratchpad, true
 	}
 	if name == "item" {
 		if c.SecondaryInput != nil {
@@ -375,12 +371,12 @@ func (c *Context) Snapshot() map[string]any {
 			res[k] = v
 		}
 	}
-	stateMap := make(map[string]any, len(c.scratchpad))
+	stateCopy := make(map[string]any, len(c.scratchpad))
 	for k, v := range c.scratchpad {
 		res[k] = v
-		stateMap[k] = v
+		stateCopy[k] = v
 	}
-	res["state"] = stateMap
+	res["state"] = stateCopy
 	return res
 }
 

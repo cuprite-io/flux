@@ -27,6 +27,14 @@ func Abort() *types.StepDefinition {
 	}
 }
 
+// VMProgram creates a StepDefinition configured to execute a pre-compiled native FluxVM program.
+func VMProgram(prog any) *types.StepDefinition {
+	return &types.StepDefinition{
+		Type:    types.StepVM,
+		Program: prog,
+	}
+}
+
 // SinkStepBuilder provides a fluent builder for configuring StepSink definitions.
 type SinkStepBuilder struct {
 	step *types.StepDefinition

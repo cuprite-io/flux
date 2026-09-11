@@ -282,9 +282,9 @@ Flux seamlessly integrates with **[Capacitor](https://github.com/cuprite-io/capa
 Explore complete runnable examples with full Capacitor integration in the [`examples/`](examples/) directory:
 
 1. **[`01_fraud_detection`](examples/01_fraud_detection/)**: Real-time fraud detection combining historical all-time high amounts, CRDT device sets, geo-spatial speed vectors, and multi-sink alerting.
-2. **[`02_personalized_offers`](examples/02_personalized_offers/)**: Dynamic candidate qualification evaluating player VIP tiers, reward scaling, and silent omission of ineligibles.
+2. **[`02_log_alerts`](examples/02_log_alerts/)**: Production log streaming and alerting engine demonstrating multi-DAG decision trees, rolling 60s 5xx error rate thresholds via `window.count`, noise suppression, and multi-channel alerting.
 3. **[`03_gaming_boss_kill`](examples/03_gaming_boss_kill/)**: Parallel branch execution dispatching reward calculations and external Discord webhook notifications simultaneously.
-4. **[`04_dynamic_pricing`](examples/04_dynamic_pricing/)**: Real-time delivery fulfillment candidate scoring based on cart thresholds and dynamic surge rates.
+4. **[`04_adaptive_mfa_access`](examples/04_adaptive_mfa_access/)**: Adaptive Zero-Trust Multi-Factor Authentication (MFA) and Risk-Based Access Control combining Spark risk assessment streams, Capacitor sliding-window IP burst velocity and failed login counters, Tor/Datacenter ASN reputation, headless browser anomaly detection, and Conduct dynamic policy pruning.
 5. **[`05_distributed_rate_limiting`](examples/05_distributed_rate_limiting/)**: High-throughput multi-tenant API gateway rate limiter using Capacitor sliding window counters.
 
 ---

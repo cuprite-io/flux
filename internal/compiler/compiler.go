@@ -41,13 +41,6 @@ func NewCompiler(cacheAccess CacheAccessor) (*Compiler, error) {
 
 	env, err = env.Extend(
 		// --- 1. State & Maps ---
-		cel.Function("set",
-			cel.Overload("set_key_val", []*cel.Type{cel.StringType, cel.AnyType}, cel.BoolType,
-				cel.FunctionBinding(func(args ...ref.Val) ref.Val {
-					return celtypes.Bool(true)
-				}),
-			),
-		),
 		cel.Function("get",
 			cel.Overload("get_map_key_fallback", []*cel.Type{cel.MapType(cel.StringType, cel.AnyType), cel.StringType, cel.AnyType}, cel.AnyType,
 				cel.FunctionBinding(func(args ...ref.Val) ref.Val {
@@ -164,6 +157,7 @@ func NewCompiler(cacheAccess CacheAccessor) (*Compiler, error) {
 					return celtypes.String(OpSha512(v))
 				})),
 		),
+		// Deprecated: Use hash.md5 instead.
 		cel.Function("crypto.md5",
 			cel.Overload("crypto_md5_str", []*cel.Type{cel.StringType}, cel.StringType,
 				cel.FunctionBinding(func(args ...ref.Val) ref.Val {
@@ -178,6 +172,7 @@ func NewCompiler(cacheAccess CacheAccessor) (*Compiler, error) {
 					return celtypes.String(OpMd5(v))
 				})),
 		),
+		// Deprecated: Use hash.crc32 instead.
 		cel.Function("crypto.crc32",
 			cel.Overload("crypto_crc32_str", []*cel.Type{cel.StringType}, cel.UintType,
 				cel.FunctionBinding(func(args ...ref.Val) ref.Val {
@@ -391,7 +386,11 @@ func NewCompiler(cacheAccess CacheAccessor) (*Compiler, error) {
 						dur = time.Minute
 					}
 					if cacheAccess != nil {
-						opCtx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+						reqCtx := GetCurrentContext()
+						if reqCtx == nil {
+							reqCtx = context.Background()
+						}
+						opCtx, cancel := context.WithTimeout(reqCtx, 2*time.Second)
 						count, _ := cacheAccess.IncrementSlidingWindow(opCtx, key, dur)
 						cancel()
 						return celtypes.Int(count)
@@ -404,7 +403,11 @@ func NewCompiler(cacheAccess CacheAccessor) (*Compiler, error) {
 				cel.FunctionBinding(func(args ...ref.Val) ref.Val {
 					key := string(args[0].(celtypes.String))
 					if cacheAccess != nil {
-						opCtx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+						reqCtx := GetCurrentContext()
+						if reqCtx == nil {
+							reqCtx = context.Background()
+						}
+						opCtx, cancel := context.WithTimeout(reqCtx, 2*time.Second)
 						val, _ := cacheAccess.Get(opCtx, key)
 						cancel()
 						return celtypes.String(val)
