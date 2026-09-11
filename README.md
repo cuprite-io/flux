@@ -252,6 +252,30 @@ for _, c := range circuits {
 
 ---
 
+## 🛠️ CLI Tooling
+
+The Flux CLI binary provides tools for offline evaluation, visual DAG tree inspection, schema validation, and deep static analysis:
+
+```bash
+# 1. Static Analysis & Rule Checking (Checks dead branches, contradictory guards, undefined variables)
+flux lint examples/*/*.circuit.json
+
+# Fail on warnings with strict mode or output JSON for CI pipelines
+flux lint --strict ./circuits/*.json
+flux lint --json ./circuits/auth.circuit.json
+
+# 2. Validate Circuit Syntax & Schema
+flux validate circuits/*.json
+
+# 3. Inspect Hierarchical Tree Structure
+flux inspect circuits/fraud.circuit.json
+
+# 4. Offline Event Evaluation
+flux eval circuits/fraud.circuit.json --payload '{"amount": 1200.0, "is_known_device": false}'
+```
+
+---
+
 ## 📚 VoltScript Language Reference
 
 **VoltScript** is built on top of **Google's Common Expression Language (CEL)**, extending standard CEL grammar with safe state mutation operators and an expanded standard library:

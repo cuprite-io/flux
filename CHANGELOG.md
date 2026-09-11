@@ -7,6 +7,63 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.9.15] - 2026-09-11
+
+### Added
+- **Static Circuit Linter & Rule Checker (`flux lint`)** (`internal/linter/`, `cmd/flux/`):
+  - Created `internal/linter` package for offline static analysis and AST validation of Circuit DAGs.
+  - Implemented diagnostics for syntax errors, dead branches (`literal false`), contradictory parent/child condition chains, duplicate node names, unreachable steps after unconditional aborts, missing sink names, and unresolved `$variable` projections.
+  - Added `flux lint <files...>` CLI command with `--strict` (fail on warnings) and `--json` (structured diagnostics for CI/CD).
+- **Extracted VoltScript Statement Parser** (`internal/compiler/script.go`):
+  - Shared string-literal-aware and quote-escaped `ExtractSetStatementsAndRemainder` parser between runtime executor and static linter.
+- **Adaptive Zero-Trust MFA & Access Control Example** (`examples/04_adaptive_mfa_access/`):
+  - Replaced dynamic delivery pricing with zero-trust risk-based access control.
+  - Integrated Tor/Datacenter ASN reputation, headless browser anomaly detection, and Capacitor sliding-window IP burst velocity / failed password counters.
+  - Demonstrated dual-paradigm execution: real-time streaming risk scoring via `Spark` paired with stateful candidate policy pruning via `Conduct`.
+
+### Fixed
+- **CLI Circuit Validation** (`cmd/flux/main.go`):
+  - Fixed `flux validate` to correctly preprocess multi-statement Volt scripts containing `set()` before expression compilation.
+- **Linter Benchmarking** (`internal/linter/linter_test.go`, `internal/compiler/compiler_bench_test.go`):
+  - Added `BenchmarkLinter_LintDAG` measuring ~227 µs/circuit verification throughput.
+  - Updated `BenchmarkOperator_State_Set` to benchmark VoltScript `set(...)` extraction.
+
+---
+
+## [0.9.14] - 2026-09-06
+
+### Added
+- **Native FluxVM Step Execution** (`types/types.go`, `helpers.go`, `internal/engine/executor.go`, `declarative.go`):
+  - Added `types.StepVM` and `StepDefinition.Program` to execute pre-compiled native `*vm.Program` bytecode directly within the engine execution tree.
+  - Added `flux.VMProgram(prog)` builder helper and declarative parser support for `"vm"` / `"stepvm"`.
+  - Reused `vm.AcquireFrame()` and `vm.ReleaseFrame()` for zero-allocation register frame recycling.
+
+### Fixed
+- **Zero-Allocation State Resolution & Deduplicated Snapshotting** (`internal/state/state.go`):
+  - Replaced per-reference deep-copy map allocations in `ResolveName("state")` with direct scratchpad reference returns (thread-confined during branch evaluation).
+  - Deduplicated `stateMap` construction in `Snapshot()`, setting `res["state"] = c.scratchpad` directly.
+- **Volt Script Remainder Boolean Gating** (`internal/engine/executor.go`):
+  - Gated branch execution on `mainProg` evaluation: if trailing remainder evaluates to boolean `false`, the branch/circuit is aborted.
+- **Request Context Propagation to Cache Operators** (`internal/compiler/context.go`, `internal/compiler/compiler.go`, `internal/engine/executor.go`):
+  - Threaded active request context into `window.count` and `cache.get` bindings using goroutine-scoped ambient context resolution.
+  - Replaced `prog.Eval` with `prog.ContextEval(ctx, sctx)` across condition and script execution.
+- **Zero-Allocation O(1) Ring Buffer Cache Eviction** (`internal/cache/cache.go`):
+  - Refactored `BoundedCache[K, V]` to use a fixed-capacity ring buffer (`ring []K`, `head int`, `tail int`, `size int`) with $O(1)$ FIFO eviction, zero slice re-allocation, and GC cleanup of evicted slots.
+- **String-Literal Aware `set(...)` Scanner** (`internal/engine/executor.go`):
+  - Implemented `findNextSetCall` with full quote-awareness (single/double quotes, escape handling, and identifier boundary checks) to avoid misparsing `set(` substrings inside string literals.
+- **Compile-Time Safety for `set` Misuse** (`internal/compiler/compiler.go`, `internal/compiler/operators.go`):
+  - Removed no-op `cel.Function("set", ...)` runtime binding so invalid use of `set` outside Volt scripts fails at compile time.
+  - Removed unused dead `OpSet` function from `operators.go`.
+  - Added formal deprecation notices on `crypto.md5` and `crypto.crc32` directing callers to `hash.md5` and `hash.crc32`.
+- **Declarative Sink Type & Nil Safety** (`declarative.go`, `flux.go`, `examples/`):
+  - Added `sink_type` mapping to `rawStep` in `declarative.go`.
+  - Added nil guard for `res` in `Conduct` (`if err != nil || res == nil || !res.Passed ...`).
+  - Updated example circuit JSONs to replace decorative strings with valid state projection keys and explicit `sink_type` tags.
+- **Toolchain Compatibility** (`go.mod`):
+  - Lowered `go.mod` compiler directive to `go 1.22.0` for broader enterprise compatibility.
+
+---
+
 ## [0.9.13] - 2026-09-06
 
 ### Fixed

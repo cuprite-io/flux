@@ -12,13 +12,11 @@ import (
 // --- 1. STATE & MAP OPERATORS BENCHMARKS ---
 
 func BenchmarkOperator_State_Set(b *testing.B) {
-	comp, _ := compiler.NewCompiler(nil)
-	prog, _ := comp.Compile(`set("session_id", "sess_994821")`)
-	input := map[string]any{"state": map[string]any{}}
-
+	script := `set("session_id", "sess_994821") && set("tier", "GOLD")`
+	b.ResetTimer()
 	b.ReportAllocs()
 	for b.Loop() {
-		_, _, _ = prog.Eval(input)
+		_, _ = compiler.ExtractSetStatementsAndRemainder(script)
 	}
 }
 
