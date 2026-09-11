@@ -3,6 +3,7 @@ module github.com/cuprite-io/flux
 go 1.25.0
 
 require (
+	github.com/cuprite-io/assay v1.0.0
 	github.com/cuprite-io/capacitor v0.26.8
 	github.com/google/cel-go v0.28.1
 	github.com/google/uuid v1.6.0

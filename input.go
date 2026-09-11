@@ -19,6 +19,8 @@ func ValidateInput(payload any) error {
 	switch payload.(type) {
 	case []byte, string: // JSON byte stream or JSON string
 		return nil
+	case map[string]any: // Normalized map
+		return nil
 	}
 
 	val := reflect.ValueOf(payload)

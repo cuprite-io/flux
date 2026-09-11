@@ -17,6 +17,7 @@ import (
 	"github.com/cuprite-io/flux/internal/engine"
 	"github.com/cuprite-io/flux/internal/pool"
 	"github.com/cuprite-io/flux/internal/registry"
+	"github.com/cuprite-io/flux/internal/schematap"
 	"github.com/cuprite-io/flux/internal/sink"
 	"github.com/cuprite-io/flux/internal/state"
 	"github.com/cuprite-io/flux/types"
@@ -24,22 +25,26 @@ import (
 
 // Engine is the unified, high-performance Circuit execution data plane.
 type Engine struct {
-	cache      cache.CacheBackend
-	ownedCache bool
-	registry   *registry.Registry
-	catalog    *catalog.Catalog
-	sinks      *sink.Registry
-	pool       *pool.WorkerPool
-	compiler   *compiler.Compiler
-	executor   *engine.Executor
-	workers    int
+	cache          cache.CacheBackend
+	ownedCache     bool
+	registry       *registry.Registry
+	catalog        *catalog.Catalog
+	sinks          *sink.Registry
+	pool           *pool.WorkerPool
+	compiler       *compiler.Compiler
+	executor       *engine.Executor
+	workers        int
+	schemaLearning bool
+	schemaConfig   schematap.Config
+	schemaTap      *schematap.SchemaTap
 }
 
 // New creates and initializes a new Flux Engine.
 func New(opts ...Option) (*Engine, error) {
 	e := &Engine{
-		sinks:   sink.New(4, 1024),
-		workers: 0,
+		sinks:        sink.New(4, 1024),
+		workers:      0,
+		schemaConfig: schematap.DefaultConfig(),
 	}
 
 	for _, opt := range opts {
@@ -65,6 +70,14 @@ func New(opts ...Option) (*Engine, error) {
 		return e.sinks.Dispatch(context.Background(), sinkName, payload)
 	})
 
+	if e.schemaLearning {
+		tap, err := schematap.New(e.cache, e.schemaConfig)
+		if err != nil {
+			return nil, fmt.Errorf("flux: failed to initialize schema tap: %w", err)
+		}
+		e.schemaTap = tap
+	}
+
 	return e, nil
 }
 
@@ -78,6 +91,11 @@ func (e *Engine) Catalog() *catalog.Catalog {
 	return e.catalog
 }
 
+// SchemaTap returns the Schema Inference subsystem if enabled.
+func (e *Engine) SchemaTap() *schematap.SchemaTap {
+	return e.schemaTap
+}
+
 // RegisterSink registers a named external sink.
 func (e *Engine) RegisterSink(name string, s sink.Sink) {
 	e.sinks.Register(name, s)
@@ -86,6 +104,9 @@ func (e *Engine) RegisterSink(name string, s sink.Sink) {
 // Close gracefully stops the Engine and drains all background queues.
 // If the cache backend was externally supplied via WithCache, it is left open.
 func (e *Engine) Close() error {
+	if e.schemaTap != nil {
+		_ = e.schemaTap.Close()
+	}
 	if e.sinks != nil {
 		_ = e.sinks.Close()
 	}
@@ -112,6 +133,14 @@ func (e *Engine) Spark(ctx context.Context, payload any, tags ...string) (*types
 			Passed:           true,
 			ExecutedCircuits: nil,
 		}, nil
+	}
+
+	if e.schemaTap != nil {
+		primaryTag := "stream:default"
+		if len(tags) > 0 {
+			primaryTag = tags[0]
+		}
+		_ = e.schemaTap.Sample(ctx, primaryTag, payload)
 	}
 
 	normalizedInput := normalizeInput(payload)

@@ -30,6 +30,7 @@ type CacheBackend interface {
 	MapSet(ctx context.Context, key, field string, value any, ttl time.Duration) (bool, error)
 	MapGetScan(ctx context.Context, key, field string, dst any) (bool, error)
 	MapGetAll(ctx context.Context, key string) (map[string]string, error)
+	MapIncrementBy(ctx context.Context, key, field string, delta float64) (float64, error)
 	MapRemove(ctx context.Context, key, field string) (bool, error)
 	Close() error
 }
@@ -312,6 +313,29 @@ func (m *MemoryCache) MapGetAll(ctx context.Context, key string) (map[string]str
 	}
 	return res, nil
 }
+
+func (m *MemoryCache) MapIncrementBy(ctx context.Context, key, field string, delta float64) (float64, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	mp, ok := m.maps[key]
+	if !ok {
+		mp = make(map[string]string)
+		m.maps[key] = mp
+	}
+
+	currentVal := 0.0
+	if s, exists := mp[field]; exists {
+		if parsed, err := strconv.ParseFloat(s, 64); err == nil {
+			currentVal = parsed
+		}
+	}
+
+	newVal := currentVal + delta
+	mp[field] = strconv.FormatFloat(newVal, 'f', -1, 64)
+	return newVal, nil
+}
+
 
 func (m *MemoryCache) MapRemove(ctx context.Context, key, field string) (bool, error) {
 	m.mu.Lock()

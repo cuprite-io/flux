@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.10.0] - 2026-09-11
+
+### Added
+- **Asynchronous Off-Hot-Path Schema Learning via `assay`** (`internal/schematap`, `flux.go`, `options.go`):
+  - Integrated `github.com/cuprite-io/assay@v1.0.0` with strict non-relative imports.
+  - Offloaded schema inference completely off `Spark`'s hot path using an asynchronous ring buffer worker queue (`Config.Async = true`, default buffer capacity `8192`).
+  - Added deterministic stride/reservoir sampling (`Config.SampleRate`, `WithSchemaSampleRate`) with non-blocking drop under saturation to guarantee zero latency degradation on real-time event evaluation.
+  - Implemented 3-tier fallback resolution hierarchy:
+    1. Discriminator key matching (`stream:logs:ERROR` vs `stream:logs:INFO`).
+    2. Structural key fingerprinting (`stream:iot:shape_8f4a12b0`).
+    3. Unified tag union (`stream:logs`).
+  - Native cache integration: extended `CacheBackend` and `MemoryCache` with `MapIncrementBy`, natively satisfying `assay.StatsBackend` with zero wrapper overhead.
+  - Added engine configuration options: `WithSchemaLearning`, `WithSchemaDiscriminators`, `WithSchemaAsync`, `WithSchemaSampleRate`, and `WithSchemaQueueSize`.
+
+---
+
 ## [0.9.15] - 2026-09-11
 
 ### Added

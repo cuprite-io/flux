@@ -104,3 +104,22 @@ func TestMemoryCache_SlidingWindowAndTTL(t *testing.T) {
 	_, err = mc.Get(ctx, "temp_key")
 	assert.Error(t, err, "key should have expired")
 }
+
+func TestMemoryCache_MapIncrementBy(t *testing.T) {
+	ctx := context.Background()
+	mc := NewMemoryCache()
+	defer mc.Close()
+
+	val, err := mc.MapIncrementBy(ctx, "stats:user1", "logins", 1.0)
+	require.NoError(t, err)
+	assert.Equal(t, 1.0, val)
+
+	val, err = mc.MapIncrementBy(ctx, "stats:user1", "logins", 2.5)
+	require.NoError(t, err)
+	assert.Equal(t, 3.5, val)
+
+	all, err := mc.MapGetAll(ctx, "stats:user1")
+	require.NoError(t, err)
+	assert.Equal(t, "3.5", all["logins"])
+}
+
