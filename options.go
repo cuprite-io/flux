@@ -4,6 +4,8 @@ import (
 	"github.com/cuprite-io/flux/internal/cache"
 	"github.com/cuprite-io/flux/internal/schematap"
 	"github.com/cuprite-io/flux/internal/sink"
+	"github.com/cuprite-io/flux/internal/telemetry"
+	"go.opentelemetry.io/otel/trace"
 )
 
 // Option configures an Engine instance.
@@ -70,4 +72,12 @@ func WithSchemaQueueSize(size int) Option {
 		e.schemaConfig.QueueSize = size
 	}
 }
+
+// WithTracer enables OpenTelemetry distributed tracing across Spark, Conduct, Nodes, and Sinks.
+func WithTracer(tr trace.Tracer) Option {
+	return func(e *Engine) {
+		e.tracer = telemetry.NewTracer(tr, telemetry.AttrFluxVersion.String(Version))
+	}
+}
+
 

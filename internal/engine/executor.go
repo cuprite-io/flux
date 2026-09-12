@@ -10,10 +10,13 @@ import (
 	"github.com/cuprite-io/flux/internal/compiler"
 	"github.com/cuprite-io/flux/internal/pool"
 	"github.com/cuprite-io/flux/internal/state"
+	"github.com/cuprite-io/flux/internal/telemetry"
 	"github.com/cuprite-io/flux/internal/vm"
 	"github.com/cuprite-io/flux/types"
 	"github.com/google/cel-go/cel"
 	celtypes "github.com/google/cel-go/common/types"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/trace"
 )
 
 var (
@@ -39,20 +42,36 @@ type Executor struct {
 	workerPool  *pool.WorkerPool
 	sinkFn      SinkDispatcher
 	scriptCache *cache.BoundedCache[string, *compiledVoltScript]
+	tracer      *telemetry.Tracer
 }
 
 // NewExecutor creates a new Circuit tree Executor.
-func NewExecutor(comp *compiler.Compiler, wp *pool.WorkerPool, sinkFn SinkDispatcher) *Executor {
+func NewExecutor(comp *compiler.Compiler, wp *pool.WorkerPool, sinkFn SinkDispatcher, opts ...ExecutorOption) *Executor {
 	if wp == nil {
 		wp = pool.GetDefaultPool()
 	}
-	return &Executor{
+	exec := &Executor{
 		compiler:    comp,
 		workerPool:  wp,
 		sinkFn:      sinkFn,
 		scriptCache: cache.NewBoundedCache[string, *compiledVoltScript](4096),
 	}
+	for _, opt := range opts {
+		opt(exec)
+	}
+	return exec
 }
+
+// ExecutorOption configures an Executor instance.
+type ExecutorOption func(*Executor)
+
+// WithExecutorTracer configures an OpenTelemetry tracer on the executor.
+func WithExecutorTracer(tr *telemetry.Tracer) ExecutorOption {
+	return func(e *Executor) {
+		e.tracer = tr
+	}
+}
+
 
 // ExecuteCircuit evaluates a single Circuit tree from root to leaves against the provided StateContext.
 func (e *Executor) ExecuteCircuit(ctx context.Context, circuit *types.Circuit, sctx *state.Context) (*types.SparkResult, error) {
@@ -64,23 +83,44 @@ func (e *Executor) ExecuteCircuit(ctx context.Context, circuit *types.Circuit, s
 		}, nil
 	}
 
+	var span trace.Span
+	if e.tracer.IsEnabled() {
+		ctx, span = e.tracer.Start(ctx, "flux.circuit:"+circuit.ID,
+			trace.WithAttributes(
+				telemetry.AttrCircuitID.String(circuit.ID),
+				telemetry.AttrCircuitTags.StringSlice(circuit.Tags),
+			),
+		)
+	}
+
 	// Start execution from root node at bit index 0
 	e.executeNode(ctx, circuit.Root, sctx, 1<<0)
 
 	if sctx.IsAborted() {
+		err := ErrCircuitAborted
+		if span != nil {
+			span.SetAttributes(telemetry.AttrPassed.Bool(false))
+			telemetry.EndSpan(span, err)
+		}
 		return &types.SparkResult{
 			OriginalInput:    sctx.OriginalInput,
 			ReturnedData:     sctx.ReturnData(),
 			Passed:           false,
 			ExecutedCircuits: []string{circuit.ID},
 			Errors:           sctx.Errors(),
-		}, ErrCircuitAborted
+		}, err
+	}
+
+	passed := len(sctx.Errors()) == 0
+	if span != nil {
+		span.SetAttributes(telemetry.AttrPassed.Bool(passed))
+		telemetry.EndSpan(span, nil)
 	}
 
 	return &types.SparkResult{
 		OriginalInput:    sctx.OriginalInput,
 		ReturnedData:     sctx.ReturnData(),
-		Passed:           len(sctx.Errors()) == 0,
+		Passed:           passed,
 		ExecutedCircuits: []string{circuit.ID},
 		Errors:           sctx.Errors(),
 	}, nil
@@ -99,6 +139,22 @@ func (e *Executor) executeNode(ctx context.Context, node *types.Node, sctx *stat
 	// 1. Bitmask Pruning Check: If this node is already marked dead, skip entire sub-tree
 	if sctx.IsPruned(nodeBit) || sctx.IsAborted() {
 		return
+	}
+
+	var span trace.Span
+	if e.tracer.IsEnabled() {
+		ctx, span = e.tracer.Start(ctx, "flux.node:"+node.Name,
+			trace.WithAttributes(
+				telemetry.AttrNodeName.String(node.Name),
+				telemetry.AttrNodeCondition.String(node.Condition),
+			),
+		)
+		defer func() {
+			if span != nil {
+				span.SetAttributes(telemetry.AttrNodePruned.Bool(sctx.IsPruned(nodeBit)))
+				telemetry.EndSpan(span, nil)
+			}
+		}()
 	}
 
 	// 2. Evaluate Node Guard Condition
@@ -210,6 +266,20 @@ func (e *Executor) getOrCompileScript(script string) (*compiledVoltScript, error
 
 // executeStep executes a single StepDefinition within a node.
 func (e *Executor) executeStep(ctx context.Context, step *types.StepDefinition, sctx *state.Context) error {
+	var span trace.Span
+	if e.tracer.IsEnabled() && step.Type != types.StepSink { // sink steps manage their own span with payload info
+		spanName := "flux.step:" + strings.ToLower(step.Type.String())
+		var attrs []attribute.KeyValue
+		attrs = append(attrs, telemetry.AttrStepType.String(strings.ToLower(step.Type.String())))
+		if step.Script != "" {
+			attrs = append(attrs, telemetry.AttrStepScript.String(step.Script))
+		}
+		ctx, span = e.tracer.Start(ctx, spanName, trace.WithAttributes(attrs...))
+		defer func() {
+			telemetry.EndSpan(span, nil)
+		}()
+	}
+
 	switch step.Type {
 	case types.StepVolt:
 		if step.Script == "" {
@@ -217,6 +287,9 @@ func (e *Executor) executeStep(ctx context.Context, step *types.StepDefinition, 
 		}
 		compiled, err := e.getOrCompileScript(step.Script)
 		if err != nil {
+			if span != nil {
+				telemetry.EndSpan(span, err)
+			}
 			return err
 		}
 
@@ -275,6 +348,19 @@ func (e *Executor) executeStep(ctx context.Context, step *types.StepDefinition, 
 			if payload == nil {
 				payload = sctx.Snapshot()
 			}
+
+			if e.tracer.IsEnabled() {
+				_, span := e.tracer.Start(ctx, "flux.sink:"+step.SinkName,
+					trace.WithAttributes(
+						telemetry.AttrSinkName.String(step.SinkName),
+						telemetry.AttrStepType.String("sink"),
+					),
+				)
+				err := e.sinkFn(step.SinkName, payload)
+				telemetry.EndSpan(span, err)
+				return err
+			}
+
 			return e.sinkFn(step.SinkName, payload)
 		}
 		return nil

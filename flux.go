@@ -20,7 +20,9 @@ import (
 	"github.com/cuprite-io/flux/internal/schematap"
 	"github.com/cuprite-io/flux/internal/sink"
 	"github.com/cuprite-io/flux/internal/state"
+	"github.com/cuprite-io/flux/internal/telemetry"
 	"github.com/cuprite-io/flux/types"
+	"go.opentelemetry.io/otel/trace"
 )
 
 // Engine is the unified, high-performance Circuit execution data plane.
@@ -37,6 +39,7 @@ type Engine struct {
 	schemaLearning bool
 	schemaConfig   schematap.Config
 	schemaTap      *schematap.SchemaTap
+	tracer         *telemetry.Tracer
 }
 
 // New creates and initializes a new Flux Engine.
@@ -66,9 +69,14 @@ func New(opts ...Option) (*Engine, error) {
 	}
 	e.compiler = comp
 
+	var execOpts []engine.ExecutorOption
+	if e.tracer != nil {
+		execOpts = append(execOpts, engine.WithExecutorTracer(e.tracer))
+	}
+
 	e.executor = engine.NewExecutor(e.compiler, e.pool, func(sinkName string, payload any) error {
 		return e.sinks.Dispatch(context.Background(), sinkName, payload)
-	})
+	}, execOpts...)
 
 	if e.schemaLearning {
 		tap, err := schematap.New(e.cache, e.schemaConfig)
@@ -126,13 +134,37 @@ func (e *Engine) Spark(ctx context.Context, payload any, tags ...string) (*types
 		return nil, err
 	}
 
-	circuits := e.registry.GetMatching(ctx, tags...)
+	var span trace.Span
+	if e.tracer.IsEnabled() {
+		ctx, span = e.tracer.Start(ctx, "flux.spark",
+			trace.WithAttributes(
+				telemetry.AttrSparkTags.StringSlice(tags),
+			),
+		)
+	}
+
+	var prepSpan trace.Span
+	var prepCtx context.Context = ctx
+	if e.tracer.IsEnabled() {
+		prepCtx, prepSpan = e.tracer.Start(ctx, "flux.spark:prepare")
+	}
+
+	circuits := e.registry.GetMatching(prepCtx, tags...)
 	if len(circuits) == 0 {
-		return &types.SparkResult{
+		if prepSpan != nil {
+			prepSpan.SetAttributes(telemetry.AttrMatchingCircuits.Int(0))
+			telemetry.EndSpan(prepSpan, nil)
+		}
+		res := &types.SparkResult{
 			OriginalInput:    payload,
 			Passed:           true,
 			ExecutedCircuits: nil,
-		}, nil
+		}
+		if span != nil {
+			span.SetAttributes(telemetry.AttrPassed.Bool(true))
+			telemetry.EndSpan(span, nil)
+		}
+		return res, nil
 	}
 
 	if e.schemaTap != nil {
@@ -140,10 +172,14 @@ func (e *Engine) Spark(ctx context.Context, payload any, tags ...string) (*types
 		if len(tags) > 0 {
 			primaryTag = tags[0]
 		}
-		_ = e.schemaTap.Sample(ctx, primaryTag, payload)
+		_ = e.schemaTap.Sample(prepCtx, primaryTag, payload)
 	}
 
 	normalizedInput := normalizeInput(payload)
+	if prepSpan != nil {
+		prepSpan.SetAttributes(telemetry.AttrMatchingCircuits.Int(len(circuits)))
+		telemetry.EndSpan(prepSpan, nil)
+	}
 
 	// Single-Circuit Fast Path (>95% production workload)
 	if len(circuits) == 1 {
@@ -155,15 +191,24 @@ func (e *Engine) Spark(ctx context.Context, payload any, tags ...string) (*types
 			if res.ReturnedData == nil {
 				res.ReturnedData = make(map[string]any)
 			}
+			if span != nil {
+				span.SetAttributes(telemetry.AttrPassed.Bool(res.Passed))
+				telemetry.EndSpan(span, err)
+			}
 			return res, err
 		}
-		return &types.SparkResult{
+		sparkRes := &types.SparkResult{
 			OriginalInput:    payload,
 			ReturnedData:     make(map[string]any),
 			Passed:           err == nil,
 			ExecutedCircuits: []string{circuits[0].ID},
 			Errors:           []error{err},
-		}, err
+		}
+		if span != nil {
+			span.SetAttributes(telemetry.AttrPassed.Bool(sparkRes.Passed))
+			telemetry.EndSpan(span, err)
+		}
+		return sparkRes, err
 	}
 
 	combinedResult := &types.SparkResult{
@@ -207,6 +252,11 @@ func (e *Engine) Spark(ctx context.Context, payload any, tags ...string) (*types
 		}
 	}
 
+	if span != nil {
+		span.SetAttributes(telemetry.AttrPassed.Bool(combinedResult.Passed))
+		telemetry.EndSpan(span, nil)
+	}
+
 	return combinedResult, nil
 }
 
@@ -223,6 +273,16 @@ func (e *Engine) Conduct(ctx context.Context, req *types.ConductRequest) (*types
 		defer cancel()
 	}
 
+	var span trace.Span
+	if e.tracer.IsEnabled() {
+		ctx, span = e.tracer.Start(ctx, "flux.conduct",
+			trace.WithAttributes(
+				telemetry.AttrConductEntity.String(req.EntityID),
+				telemetry.AttrConductCategory.String(req.TargetCategory()),
+			),
+		)
+	}
+
 	startTime := time.Now()
 
 	// 1. Fetch Candidate Items matching target category partition in 1 call
@@ -231,12 +291,20 @@ func (e *Engine) Conduct(ctx context.Context, req *types.ConductRequest) (*types
 	evaluatedCount := len(items)
 
 	if evaluatedCount == 0 {
-		return &types.ConductResult{
+		res := &types.ConductResult{
 			EntityID:       req.EntityID,
 			Items:          nil,
 			EvaluatedCount: 0,
 			Duration:       time.Since(startTime),
-		}, nil
+		}
+		if span != nil {
+			span.SetAttributes(
+				telemetry.AttrCandidateCount.Int(0),
+				telemetry.AttrQualifiedCount.Int(0),
+			)
+			telemetry.EndSpan(span, nil)
+		}
+		return res, nil
 	}
 
 	// 2. Hydrate Entity State from CacheBackend if EntityID is specified
@@ -313,6 +381,9 @@ func (e *Engine) Conduct(ctx context.Context, req *types.ConductRequest) (*types
 	latch.Wait()
 
 	if err := ctx.Err(); err != nil {
+		if span != nil {
+			telemetry.EndSpan(span, err)
+		}
 		return nil, fmt.Errorf("flux conduct: %w", err)
 	}
 
@@ -352,6 +423,14 @@ func (e *Engine) Conduct(ctx context.Context, req *types.ConductRequest) (*types
 			qualified[i].Rank = i + 1
 		}
 		finalItems = qualified
+	}
+
+	if span != nil {
+		span.SetAttributes(
+			telemetry.AttrCandidateCount.Int(evaluatedCount),
+			telemetry.AttrQualifiedCount.Int(len(finalItems)),
+		)
+		telemetry.EndSpan(span, nil)
 	}
 
 	return &types.ConductResult{

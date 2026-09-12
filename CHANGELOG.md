@@ -7,9 +7,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.11.0] - 2026-09-12
+
+### Added
+
+- **Native OpenTelemetry Distributed Tracing (`flux.WithTracer`)** (`internal/telemetry`, `internal/engine`, `flux.go`, `options.go`):
+  - Added zero-overhead OpenTelemetry tracing instrumentation for streaming event evaluation and item qualification.
+  - Implemented `internal/telemetry` with standardized semantic attributes: `flux.circuit.id`, `flux.circuit.tags`, `flux.node.name`, `flux.node.pruned`, `flux.node.condition`, `flux.step.type`, `flux.step.script`, `flux.sink.name`, `flux.passed`, `flux.spark.tags`, `flux.spark.matching_circuits`, `flux.version`, `flux.conduct.entity_id`, `flux.conduct.category`, `flux.conduct.evaluated_count`, and `flux.conduct.qualified_count`.
+  - Automatically injected default metadata (`flux.version`) across all spans created by the engine.
+  - Added `flux.spark:prepare` child span covering registry circuit matching, schema sampling, and payload normalization, eliminating uninstrumented time in `flux.spark`.
+  - Added child step execution spans (`flux.step:volt`, `flux.step:return`, `flux.step:vm`, `flux.sink:<name>`) eliminating uninstrumented gaps in parent nodes prior to child node dispatch.
+  - Guaranteed zero-allocation no-op performance when tracing is disabled or not configured.
+
+---
+
 ## [0.10.0] - 2026-09-11
 
 ### Added
+
 - **Asynchronous Off-Hot-Path Schema Learning via `assay`** (`internal/schematap`, `flux.go`, `options.go`):
   - Integrated `github.com/cuprite-io/assay@v1.0.0` with strict non-relative imports.
   - Offloaded schema inference completely off `Spark`'s hot path using an asynchronous ring buffer worker queue (`Config.Async = true`, default buffer capacity `8192`).
@@ -26,6 +41,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [0.9.15] - 2026-09-11
 
 ### Added
+
 - **Static Circuit Linter & Rule Checker (`flux lint`)** (`internal/linter/`, `cmd/flux/`):
   - Created `internal/linter` package for offline static analysis and AST validation of Circuit DAGs.
   - Implemented diagnostics for syntax errors, dead branches (`literal false`), contradictory parent/child condition chains, duplicate node names, unreachable steps after unconditional aborts, missing sink names, and unresolved `$variable` projections.
@@ -38,6 +54,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Demonstrated dual-paradigm execution: real-time streaming risk scoring via `Spark` paired with stateful candidate policy pruning via `Conduct`.
 
 ### Fixed
+
 - **CLI Circuit Validation** (`cmd/flux/main.go`):
   - Fixed `flux validate` to correctly preprocess multi-statement Volt scripts containing `set()` before expression compilation.
 - **Linter Benchmarking** (`internal/linter/linter_test.go`, `internal/compiler/compiler_bench_test.go`):
@@ -49,12 +66,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [0.9.14] - 2026-09-06
 
 ### Added
+
 - **Native FluxVM Step Execution** (`types/types.go`, `helpers.go`, `internal/engine/executor.go`, `declarative.go`):
   - Added `types.StepVM` and `StepDefinition.Program` to execute pre-compiled native `*vm.Program` bytecode directly within the engine execution tree.
   - Added `flux.VMProgram(prog)` builder helper and declarative parser support for `"vm"` / `"stepvm"`.
   - Reused `vm.AcquireFrame()` and `vm.ReleaseFrame()` for zero-allocation register frame recycling.
 
 ### Fixed
+
 - **Zero-Allocation State Resolution & Deduplicated Snapshotting** (`internal/state/state.go`):
   - Replaced per-reference deep-copy map allocations in `ResolveName("state")` with direct scratchpad reference returns (thread-confined during branch evaluation).
   - Deduplicated `stateMap` construction in `Snapshot()`, setting `res["state"] = c.scratchpad` directly.
@@ -83,6 +102,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [0.9.13] - 2026-09-06
 
 ### Fixed
+
 - **Volt `set(...)` Single-Evaluation Semantics** (`internal/engine/executor.go`):
   - Fixed desugared `set(...)` evaluation by stripping extracted mutation calls from the compiled remainder expression (`mainProg`), ensuring side-effecting operators (`window.count`, `uuid`, `ml.score`, `cache.get`) evaluate strictly once per event.
 - **Registry Stale Tag Reconciliation & Error Propagation** (`internal/registry/registry.go`):
@@ -111,6 +131,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [0.9.12] - 2026-09-06
 
 ### Fixed
+
 - **Registry Single Source of Truth & Statelessness** (`internal/registry/registry.go`):
   - Refactored `Registry` to be a 100% pure stateless adapter directly over `CacheBackend` (Capacitor), eliminating all in-memory `RegistrySnapshot` shadow caching.
   - Stored circuits directly under `registry:circuits` partition maps and indexed tags via distributed sets (`registry:tag:<tag>`).
@@ -148,6 +169,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [0.9.11] - 2026-09-06
 
 ### Performance
+
 - **Compiler Single-Line Fast Path & Direct Struct Field Introspection** (`internal/compiler/compiler.go`, `internal/state/state.go`):
   - Fast-pathed single-line expression preprocessing in `compiler.preprocess` by checking `!strings.ContainsRune(expr, '\n')`, eliminating string splitting, trimming allocations, and slice creations for single-line Volt expressions.
   - Implemented cached struct field index map (`structTypeCache`) inside `state.Context` to accelerate struct attribute lookups and snapshots without full map conversions.
@@ -157,6 +179,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [0.9.10] - 2026-09-06
 
 ### Performance
+
 - **Condition Unboxing Fast Path & Return Assignment Optimization** (`internal/engine/executor.go`, `internal/state/state.go`):
   - Fast-pathed boolean guard evaluation in `evalCondition` by comparing evaluated CEL values directly against singleton pointers (`celtypes.True`, `celtypes.False`), bypassing reflection unboxing.
   - Eliminated duplicate map allocation and key iteration in `sctx.SetReturn()` by directly assigning the input map pointer on first write.
@@ -167,6 +190,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [0.9.9] - 2026-09-02
 
 ### Performance
+
 - **Zero-Allocation Layered Candidate Context in Conduct** (`internal/state/state.go`, `flux.go`):
   - Added `SecondaryInput` and `AcquireLayeredContext` in `state.Context` implementing layered on-demand CEL variable resolution.
   - Completely eliminated intermediate `itemContext` map allocations and key-copy loops across parallel candidate scoring worker threads.
@@ -177,6 +201,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [0.9.8] - 2026-09-02
 
 ### Performance
+
 - **Bounded Min-Heap for Top-K Candidate Selection in Conduct** (`flux.go`):
   - Implemented `itemMinHeap` using standard `container/heap` with `heap.Fix()` $O(N \log K)$ bounded pruning when $K < N$.
   - Avoided $O(N \log N)$ full slice reflection sorting across discarded non-qualifying candidate items, accelerating candidate ranking in `Conduct()`.
@@ -186,6 +211,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [0.9.7] - 2026-09-02
 
 ### Performance
+
 - **Zero-Allocation Tag Query Routing in Registry** (`internal/registry/registry.go`):
   - Pre-resolved Circuit pointer slices (`tagCircuits map[string][]*types.Circuit`) in `RegistrySnapshot` during `Put()` / `Delete()` copy-on-write hot swaps.
   - Implemented instant $O(1)$ single-tag fast-path in `GetMatching()` that returns pre-indexed Circuit pointer slices directly with 0 intermediate map allocations or ID lookup loops.
@@ -195,6 +221,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [0.9.6] - 2026-09-02
 
 ### Performance
+
 - **StateContext Object Pooling via `sync.Pool`** (`internal/state/state.go`, `flux.go`):
   - Implemented pre-warmed `contextPool sync.Pool` with `AcquireContext` and `ReleaseContext` for zero-allocation lifecycle recycling.
   - Used Go 1.21+ builtin `clear()` to reset scratchpad and delta hash maps without releasing underlying bucket allocations back to the GC.
@@ -205,6 +232,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [0.9.5] - 2026-09-02
 
 ### Performance
+
 - **Single-Circuit Fast Path & Lean Context Sizing** (`flux.go`, `internal/state/state.go`):
   - Added single-circuit direct return fast-path in `Spark()`, bypassing multi-circuit result aggregation, slice allocations, and map copy loops for single-circuit invocations.
   - Sized initial `state.Context` scratchpad and delta map capacities to lean defaults (4 and 2), reducing per-context heap allocation footprint by **~64%** ($2,072\text{ B} \rightarrow 752\text{ B}$).
@@ -214,6 +242,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [0.9.4] - 2026-09-02
 
 ### Performance
+
 - **AOT Script Desugaring & Pre-Compilation in Step Execution** (`internal/engine/executor.go`):
   - Added thread-safe compiled script cache (`scriptCache`, `compiledVoltScript`) inside `Executor`.
   - Desugared and compiled `set()` mutation statements and main expressions once, eliminating runtime string scanning, quote matching, parenthesis counting, and map lookups on the execution hot path.
@@ -224,6 +253,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [0.9.3] - 2026-09-02
 
 ### Performance
+
 - **Lock-Free Candidate Worker Buffering in Conduct** (`flux.go`):
   - Eliminated parallel worker mutex serialization (`qualifiedMu`) during candidate qualification by utilizing pre-allocated thread-indexed output slots (`evalResults`) with lock-free result compaction.
   - Streamlined `itemContext` construction to eliminate redundant map cloning across parallel candidate evaluation goroutines.
@@ -234,6 +264,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [0.9.2] - 2026-09-02
 
 ### Performance
+
 - **Zero-JSON Cached Struct Ingestion in Spark / Conduct** (`flux.go`):
   - Replaced JSON double round-tripping (`json.Marshal` + `json.Unmarshal`) in `normalizeInput` with a cached reflection field metadata extractor (`structFieldCache`, `fastStructToMap`).
   - Extracted JSON struct tags and field indices once per type, mapping struct field values directly into execution maps without string serialization.
@@ -244,6 +275,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [0.9.1] - 2026-09-02
 
 ### Performance
+
 - **Zero-Allocation CEL State Activation** (`internal/state/state.go`, `internal/engine/executor.go`):
   - Implemented Google CEL `interpreter.Activation` directly on `state.Context` (`ResolveName` and `Parent`).
   - Completely eliminated intermediate `sctx.Snapshot()` map allocations and variable copy loops during DAG condition and step evaluations.
@@ -255,6 +287,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [0.9.0] - 2026-09-02
 
 ### Added
+
 - **Top-Level Engine Benchmark Suite** (`flux_bench_test.go`):
   - Standard Go benchmarks for `Spark` (Simple vs Advanced DAGs) and `Conduct` candidate item scoring.
 - **Full VoltScript Operator Benchmark Suite** (`internal/compiler/compiler_bench_test.go`):
@@ -274,6 +307,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [0.8.1] - 2026-09-02
 
 ### Documentation
+
 - Completely updated `README.md` with:
   - Official centered mascot header matching the Cuprite project family styling.
   - Comprehensive quickstart guides for `Spark` reactive streams and `Conduct` candidate scoring.
@@ -287,6 +321,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [0.8.0] - 2026-09-02
 
 ### Added
+
 - **Map / Hash Primitives in CacheBackend** (`internal/cache/cache.go`):
   - Added `MapSet`, `MapGetScan`, `MapGetAll`, and `MapRemove` matching Capacitor's distributed map primitives.
   - Implemented thread-safe in-memory map storage in `MemoryCache`.
@@ -294,6 +329,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Added `Category string` field to `Item` and `ConductRequest` with automatic backward-compatible fallback to `Tags[0]`.
 
 ### Changed
+
 - **Eliminated Duplicate Catalog Cache in Flux** (`internal/catalog/catalog.go`, `flux.go`):
   - Replaced Flux's internal in-memory catalog cache maps and copy-on-write snapshots with a pure stateless adapter backed directly by Capacitor's Category-Partitioned Maps (`catalog:group:<category>`).
   - Reduced Flux catalog memory footprint by 50%.
@@ -307,6 +343,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [0.7.0] - 2026-09-01
 
 ### Added
+
 - **Multi-Node Distributed Integration Test** (`integration_test.go`):
   - Validates instantaneous state convergence and delta log replication across two independent Flux instances backed by separate Capacitor peer nodes without any direct inter-instance communication.
 - **Production Real-World Examples** (`examples/`):
@@ -319,6 +356,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Volt Engine Geo Aliasing**: Added `geo.distance_km` alias alongside `geo.dist_km`.
 
 ### Changed
+
 - Preserved `ReturnedData` in `SparkResult` when `StepAbort` is triggered, ensuring self-contained caller responses (`internal/engine/executor.go`, `flux.go`).
 - Improved `state.Snapshot()` to expose top-level `payload` and state variables for direct CEL expressions (`internal/state/state.go`).
 - Prioritized JSON unmarshaling in entity state hydration (`Conduct`).
@@ -328,6 +366,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [0.6.0] - 2026-08-31
 
 ### Added
+
 - **Declarative JSON/YAML Loaders** (`declarative.go`):
   - Parse `.circuit.json`, `.circuit.yaml`, `.item.json`, and `.item.yaml` files.
   - `LoadCircuitJSON`, `LoadCircuitYAML`, `LoadCircuitFile`, `LoadItemJSON`, `LoadItemYAML`, `LoadItemFile`, `LoadCircuitsFromDir`.
@@ -342,6 +381,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [0.5.0] - 2026-08-31
 
 ### Added
+
 - **Top-Level Engine API** (`flux.go`, `helpers.go`, `options.go`, `input.go`):
   - `flux.New(opts...)` constructor with fluent functional configuration (`WithCache`, `WithWorkers`, `WithSink`).
   - `Spark(ctx, payload, tags...)`: High-throughput reactive execution with strict type validation (`JSON`, `Slice`, `Struct`), sequential multi-Circuit isolation, and output projection.
@@ -354,6 +394,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [0.4.0] - 2026-08-31
 
 ### Added
+
 - **Cache Backend Contract & MemoryCache** (`internal/cache`):
   - Interface definition matching distributed caching capabilities (`Get`, `Set`, `IncrementSlidingWindow`, `SetAdd`, `SetMembers`, `Exists`, `Delete`).
   - Thread-safe in-memory cache backend with TTL expiration, sliding time-window counters, and set operations.
@@ -368,6 +409,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Asynchronous dispatch queue with bounded worker threads and backpressure execution.
 
 ### Changed
+
 - Hardened `FrameArena.Reset()` (`internal/vm/regfile.go`) to explicitly zero out handle references for immediate GC reclamation.
 
 ---
@@ -375,6 +417,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [0.3.0] - 2026-08-31
 
 ### Added
+
 - **Circuit StateContext** (`internal/state`):
   - Execution context managing immutable input base, thread-safe scratchpad, and delta mutation tracking for forked parallel child branches.
   - $O(1)$ atomic `DeadMask` bitmask operations for branch liveness and condition pruning.
@@ -394,6 +437,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [0.2.0] - 2026-08-31
 
 ### Added
+
 - **Core Types Package** (`types/types.go`):
   - Declared `Circuit`, `Node`, `Item`, `StepType` (`StepVolt`, `StepSink`, `StepReturn`, `StepAbort`), `StateContext`, `SparkResult`, `ConductRequest`, and `ConductResult`.
 - **Register Virtual Machine (`FluxVM`)** (`internal/vm`):
@@ -412,6 +456,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [0.1.0] - 2026-08-30
 
 ### Added
+
 - Initialized Go module `github.com/cuprite-io/flux` (`go.mod`).
 - Added version tracking constant (`version.go`).
 - Added license file (`LICENSE`).
