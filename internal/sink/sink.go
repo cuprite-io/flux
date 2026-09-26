@@ -33,11 +33,12 @@ type sinkTask struct {
 
 // Registry manages named Sink dispatchers and an asynchronous dispatch pipeline.
 type Registry struct {
-	mu        sync.RWMutex
-	sinks     map[string]Sink
-	queue     chan sinkTask
-	stopped   uint32
-	wg        sync.WaitGroup
+	mu          sync.RWMutex
+	sinks       map[string]Sink
+	descriptors map[string]Descriptor
+	queue       chan sinkTask
+	stopped     uint32
+	wg          sync.WaitGroup
 }
 
 // New creates a new Sink Registry with an async worker pool.
@@ -50,9 +51,10 @@ func New(workers int, queueDepth int) *Registry {
 	}
 
 	r := &Registry{
-		sinks:   make(map[string]Sink),
-		queue:   make(chan sinkTask, queueDepth),
-		stopped: 0,
+		sinks:       make(map[string]Sink),
+		descriptors: make(map[string]Descriptor),
+		queue:       make(chan sinkTask, queueDepth),
+		stopped:     0,
 	}
 
 	r.wg.Add(workers)
@@ -78,11 +80,41 @@ func (r *Registry) workerLoop() {
 	}
 }
 
-// Register registers a named Sink implementation.
-func (r *Registry) Register(name string, s Sink) {
+// Register registers a named Sink implementation with optional descriptive metadata.
+func (r *Registry) Register(name string, s Sink, opts ...Option) {
+	desc := Descriptor{
+		Name: name,
+	}
+	for _, opt := range opts {
+		if opt != nil {
+			opt(&desc)
+		}
+	}
+
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.sinks[name] = s
+	r.descriptors[name] = desc
+}
+
+// GetDescriptor returns the descriptor for a named sink.
+func (r *Registry) GetDescriptor(name string) (Descriptor, bool) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	d, ok := r.descriptors[name]
+	return d, ok
+}
+
+// ListDescriptors returns all registered sink descriptors sorted by name.
+func (r *Registry) ListDescriptors() []Descriptor {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	res := make([]Descriptor, 0, len(r.descriptors))
+	for _, d := range r.descriptors {
+		res = append(res, d)
+	}
+	SortDescriptors(res)
+	return res
 }
 
 // Dispatch sends a payload to a named Sink asynchronously with backpressure.

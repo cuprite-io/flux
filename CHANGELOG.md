@@ -7,6 +7,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.12.0] - 2026-09-26
+
+### Added
+
+- **Capacitor-Backed Streaming Value Profiler & Exemplar Buffer** (`internal/profiler`, `flux.go`, `options.go`):
+  - Implemented `internal/profiler` subsystem maintaining a 100% stateless Flux core by writing all exemplar snapshots, categorical value counters, and numerical boundaries directly to `CacheBackend` (Capacitor).
+  - Built-in automatic PII detection and deep masking for emails (`OpMaskEmail`), credit card numbers (`OpMaskCard`), and credential redacting on sensitive keys (`password`, `token`, `secret`, `api_key`).
+  - Added deterministic 64-bit structural and discriminator fingerprinting (`ComputeFingerprint`) with bounded FIFO eviction via `MapRemove`.
+  - Added engine configuration options: `WithProfiling`, `WithProfilerSampleRate`, `WithProfilerMaxExemplars`, `WithProfilerTTL`, and `WithProfilerDiscriminators`.
+  - Added unit and integration tests (`profiler_test.go`, `internal/profiler/profiler_test.go`).
+
+- **Sink Descriptors & Introspection** (`internal/sink`, `flux.go`, `options.go`):
+  - Introduced `sink.Descriptor` with semantic metadata (`Name`, `Description`, `SinkType`, `Severity`, `Tags`).
+  - Fully generic and vendor-neutral: zero hardcoded tool integrations or vendor assumptions.
+  - Extended `Engine.RegisterSink` while preserving 100% backward compatibility with existing function signatures.
+  - Added engine introspection APIs: `Engine.ListSinks()` and `Engine.SinkDescriptor(name)`.
+  - Added unit and engine tests (`internal/sink/descriptor_test.go`, `sink_descriptor_test.go`).
+
+---
+
 ## [0.11.1] - 2026-09-26
 
 ### Changed

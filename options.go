@@ -1,7 +1,10 @@
 package flux
 
 import (
+	"time"
+
 	"github.com/cuprite-io/flux/internal/cache"
+	"github.com/cuprite-io/flux/internal/profiler"
 	"github.com/cuprite-io/flux/internal/schematap"
 	"github.com/cuprite-io/flux/internal/sink"
 	"github.com/cuprite-io/flux/internal/telemetry"
@@ -78,6 +81,67 @@ func WithTracer(tr trace.Tracer) Option {
 	return func(e *Engine) {
 		e.tracer = telemetry.NewTracer(tr, telemetry.AttrFluxVersion.String(Version))
 	}
+}
+
+// WithProfiling enables streaming value profiling and exemplar retention directly in CacheBackend.
+func WithProfiling(enable bool, cfg ...profiler.Config) Option {
+	return func(e *Engine) {
+		e.profiling = enable
+		if len(cfg) > 0 {
+			e.profilerConfig = cfg[0]
+		} else {
+			e.profilerConfig = profiler.DefaultConfig()
+		}
+		e.profilerConfig.Enabled = enable
+	}
+}
+
+// WithProfilerSampleRate sets the sampling ratio (0.0 to 1.0) for value profiling.
+func WithProfilerSampleRate(rate float64) Option {
+	return func(e *Engine) {
+		e.profilerConfig.SampleRate = rate
+	}
+}
+
+// WithProfilerMaxExemplars sets the maximum number of distinct exemplars retained per tag in CacheBackend.
+func WithProfilerMaxExemplars(max int) Option {
+	return func(e *Engine) {
+		e.profilerConfig.MaxExemplars = max
+	}
+}
+
+// WithProfilerTTL sets the rolling TTL duration for profiler entries in CacheBackend.
+func WithProfilerTTL(ttl time.Duration) Option {
+	return func(e *Engine) {
+		e.profilerConfig.TTL = ttl
+	}
+}
+
+// WithProfilerDiscriminators sets prioritized discriminator keys for exemplar shape partitioning.
+func WithProfilerDiscriminators(keys ...string) Option {
+	return func(e *Engine) {
+		e.profilerConfig.DiscriminatorKeys = keys
+	}
+}
+
+// WithSinkDescription sets a human-readable explanation of when and why a sink should be invoked.
+func WithSinkDescription(desc string) SinkOption {
+	return sink.WithDescription(desc)
+}
+
+// WithSinkSeverity sets the severity tier associated with a sink (e.g. "critical", "warning", "info").
+func WithSinkSeverity(sev string) SinkOption {
+	return sink.WithSeverity(sev)
+}
+
+// WithSinkType specifies a user-defined category or protocol string for a sink.
+func WithSinkType(st string) SinkOption {
+	return sink.WithType(st)
+}
+
+// WithSinkTags attaches descriptive tags to a sink.
+func WithSinkTags(tags ...string) SinkOption {
+	return sink.WithTags(tags...)
 }
 
 

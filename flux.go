@@ -16,6 +16,7 @@ import (
 	"github.com/cuprite-io/flux/internal/compiler"
 	"github.com/cuprite-io/flux/internal/engine"
 	"github.com/cuprite-io/flux/internal/pool"
+	"github.com/cuprite-io/flux/internal/profiler"
 	"github.com/cuprite-io/flux/internal/registry"
 	"github.com/cuprite-io/flux/internal/schematap"
 	"github.com/cuprite-io/flux/internal/sink"
@@ -39,15 +40,19 @@ type Engine struct {
 	schemaLearning bool
 	schemaConfig   schematap.Config
 	schemaTap      *schematap.SchemaTap
+	profiling      bool
+	profilerConfig profiler.Config
+	profiler       *profiler.Profiler
 	tracer         *telemetry.Tracer
 }
 
 // New creates and initializes a new Flux Engine.
 func New(opts ...Option) (*Engine, error) {
 	e := &Engine{
-		sinks:        sink.New(4, 1024),
-		workers:      0,
-		schemaConfig: schematap.DefaultConfig(),
+		sinks:          sink.New(4, 1024),
+		workers:        0,
+		schemaConfig:   schematap.DefaultConfig(),
+		profilerConfig: profiler.DefaultConfig(),
 	}
 
 	for _, opt := range opts {
@@ -86,6 +91,14 @@ func New(opts ...Option) (*Engine, error) {
 		e.schemaTap = tap
 	}
 
+	if e.profiling {
+		prof, err := profiler.New(e.cache, e.profilerConfig)
+		if err != nil {
+			return nil, fmt.Errorf("flux: failed to initialize profiler: %w", err)
+		}
+		e.profiler = prof
+	}
+
 	return e, nil
 }
 
@@ -104,14 +117,47 @@ func (e *Engine) SchemaTap() *schematap.SchemaTap {
 	return e.schemaTap
 }
 
-// RegisterSink registers a named external sink.
-func (e *Engine) RegisterSink(name string, s sink.Sink) {
-	e.sinks.Register(name, s)
+// Profiler returns the Streaming Value Profiler subsystem if enabled.
+func (e *Engine) Profiler() *profiler.Profiler {
+	return e.profiler
+}
+
+// SinkDescriptor re-exports sink.Descriptor.
+type SinkDescriptor = sink.Descriptor
+
+// SinkOption re-exports sink.Option.
+type SinkOption = sink.Option
+
+const (
+	// SinkSeverityInfo is used for informational, audit, or routine notifications.
+	SinkSeverityInfo = sink.SeverityInfo
+	// SinkSeverityWarning is used for degraded performance, anomalies, or threshold warnings.
+	SinkSeverityWarning = sink.SeverityWarning
+	// SinkSeverityCritical is used for outages, fatal failures, security incidents, or paging on-call.
+	SinkSeverityCritical = sink.SeverityCritical
+)
+
+// RegisterSink registers a named external sink with optional descriptive metadata.
+func (e *Engine) RegisterSink(name string, s sink.Sink, opts ...sink.Option) {
+	e.sinks.Register(name, s, opts...)
+}
+
+// ListSinks returns descriptors for all registered external sinks.
+func (e *Engine) ListSinks() []sink.Descriptor {
+	return e.sinks.ListDescriptors()
+}
+
+// SinkDescriptor returns the descriptor for a named sink if registered.
+func (e *Engine) SinkDescriptor(name string) (sink.Descriptor, bool) {
+	return e.sinks.GetDescriptor(name)
 }
 
 // Close gracefully stops the Engine and drains all background queues.
 // If the cache backend was externally supplied via WithCache, it is left open.
 func (e *Engine) Close() error {
+	if e.profiler != nil {
+		_ = e.profiler.Close()
+	}
 	if e.schemaTap != nil {
 		_ = e.schemaTap.Close()
 	}
@@ -155,6 +201,14 @@ func (e *Engine) Spark(ctx context.Context, payload any, tags ...string) (*types
 			primaryTag = tags[0]
 		}
 		_ = e.schemaTap.Sample(prepCtx, primaryTag, payload)
+	}
+
+	if e.profiler != nil {
+		primaryTag := "stream:default"
+		if len(tags) > 0 {
+			primaryTag = tags[0]
+		}
+		_ = e.profiler.Sample(prepCtx, primaryTag, payload)
 	}
 
 	circuits := e.registry.GetMatching(prepCtx, tags...)
