@@ -15,6 +15,7 @@ import (
 	"github.com/cuprite-io/flux/internal/catalog"
 	"github.com/cuprite-io/flux/internal/compiler"
 	"github.com/cuprite-io/flux/internal/engine"
+	"github.com/cuprite-io/flux/internal/history"
 	"github.com/cuprite-io/flux/internal/pool"
 	"github.com/cuprite-io/flux/internal/profiler"
 	"github.com/cuprite-io/flux/internal/registry"
@@ -43,6 +44,9 @@ type Engine struct {
 	profiling      bool
 	profilerConfig profiler.Config
 	profiler       *profiler.Profiler
+	historyEnabled bool
+	historyConfig  history.Config
+	history        *history.Store
 	tracer         *telemetry.Tracer
 }
 
@@ -53,6 +57,7 @@ func New(opts ...Option) (*Engine, error) {
 		workers:        0,
 		schemaConfig:   schematap.DefaultConfig(),
 		profilerConfig: profiler.DefaultConfig(),
+		historyConfig:  history.DefaultConfig(),
 	}
 
 	for _, opt := range opts {
@@ -74,10 +79,37 @@ func New(opts ...Option) (*Engine, error) {
 	}
 	e.compiler = comp
 
+	if e.historyEnabled {
+		hist, err := history.New(e.cache, e.historyConfig)
+		if err != nil {
+			return nil, fmt.Errorf("flux: failed to initialize history store: %w", err)
+		}
+		e.history = hist
+	}
+
 	var execOpts []engine.ExecutorOption
 	if e.tracer != nil {
 		execOpts = append(execOpts, engine.WithExecutorTracer(e.tracer))
 	}
+	execOpts = append(execOpts, engine.WithAlertHook(func(ctx context.Context, circuitID, nodeName, sinkName, condition string, payload any) {
+		if e.history != nil {
+			var m map[string]any
+			if asMap, ok := payload.(map[string]any); ok {
+				m = asMap
+			} else if b, ok := payload.([]byte); ok {
+				_ = json.Unmarshal(b, &m)
+			} else if s, ok := payload.(string); ok {
+				_ = json.Unmarshal([]byte(s), &m)
+			}
+			_ = e.history.Record(ctx, history.AlertRecord{
+				CircuitID: circuitID,
+				NodeName:  nodeName,
+				SinkName:  sinkName,
+				Condition: condition,
+				Payload:   m,
+			})
+		}
+	}))
 
 	e.executor = engine.NewExecutor(e.compiler, e.pool, func(sinkName string, payload any) error {
 		return e.sinks.Dispatch(context.Background(), sinkName, payload)
@@ -122,6 +154,51 @@ func (e *Engine) Profiler() *profiler.Profiler {
 	return e.profiler
 }
 
+// History returns the Alert History Store subsystem if enabled.
+func (e *Engine) History() *history.Store {
+	return e.history
+}
+
+// GetAlertHistory queries historical alerts for a circuit from CacheBackend.
+func (e *Engine) GetAlertHistory(ctx context.Context, circuitID string, limit int) ([]history.AlertRecord, error) {
+	if e.history == nil {
+		return nil, errors.New("flux: alert history store not enabled")
+	}
+	return e.history.GetAlerts(ctx, circuitID, limit)
+}
+
+// RecordAlertFeedback attaches operator feedback to a historical alert record in CacheBackend.
+func (e *Engine) RecordAlertFeedback(ctx context.Context, circuitID, alertID string, fb history.Feedback) error {
+	if e.history == nil {
+		return errors.New("flux: alert history store not enabled")
+	}
+	return e.history.RecordFeedback(ctx, circuitID, alertID, fb)
+}
+
+// GetAlertStats queries aggregated alert counts and rates for a circuit from CacheBackend.
+func (e *Engine) GetAlertStats(ctx context.Context, circuitID string) (*history.AlertStats, error) {
+	if e.history == nil {
+		return nil, errors.New("flux: alert history store not enabled")
+	}
+	return e.history.GetStats(ctx, circuitID)
+}
+
+// AlertRecord re-exports history.AlertRecord.
+type AlertRecord = history.AlertRecord
+
+// AlertFeedback re-exports history.Feedback.
+type AlertFeedback = history.Feedback
+
+// AlertStats re-exports history.AlertStats.
+type AlertStats = history.AlertStats
+
+const (
+	FeedbackValid         = history.FeedbackValid
+	FeedbackFalsePositive = history.FeedbackFalsePositive
+	FeedbackNoisy         = history.FeedbackNoisy
+	FeedbackMuted         = history.FeedbackMuted
+)
+
 // SinkDescriptor re-exports sink.Descriptor.
 type SinkDescriptor = sink.Descriptor
 
@@ -155,6 +232,9 @@ func (e *Engine) SinkDescriptor(name string) (sink.Descriptor, bool) {
 // Close gracefully stops the Engine and drains all background queues.
 // If the cache backend was externally supplied via WithCache, it is left open.
 func (e *Engine) Close() error {
+	if e.history != nil {
+		_ = e.history.Close()
+	}
 	if e.profiler != nil {
 		_ = e.profiler.Close()
 	}

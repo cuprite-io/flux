@@ -7,6 +7,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.13.0] - 2026-09-26
+
+### Added
+
+- **Capacitor-Backed Alert & Sink History Store** (`internal/history`, `internal/engine`, `flux.go`, `options.go`):
+  - Implemented `internal/history` subsystem maintaining a 100% stateless Flux core by writing all alert records, frequency statistics, and rolling 1-hour rate windows directly to `CacheBackend` (Capacitor).
+  - Intercepted `types.StepSink` in `internal/engine/executor.go` via `AlertHook`, capturing alert snapshots (circuit ID, node name, sink name, condition, payload) without blocking hot-path event evaluation.
+  - Added automatic deep PII sanitization on stored alert payloads to ensure credentials, tokens, emails, and card numbers are never retained in history or passed to LLMs.
+  - Added bounded FIFO capacity eviction per circuit via Capacitor `MapRemove`, enforcing `MaxRecordsPerCircuit` (default: 100).
+  - Added rolling TTL expiration (default: 14 days) per circuit history key partition.
+  - Added engine configuration options: `WithHistory`, `WithHistoryTTL`, `WithHistoryMaxRecords`, and `WithHistoryAsync`.
+
+- **Alert Feedback & Telemetry Tagging API** (`internal/history`, `flux.go`):
+  - Implemented `RecordAlertFeedback` API allowing operators or automated systems to tag historical alert records with ground truth classifications (`FeedbackValid`, `FeedbackFalsePositive`, `FeedbackNoisy`, `FeedbackMuted`), author metadata, and explanatory notes.
+  - Added query methods: `Engine.GetAlertHistory(ctx, circuitID, limit)` and `Engine.GetAlertStats(ctx, circuitID)`.
+  - Added unit, race, and engine integration tests (`internal/history/store_test.go`, `history_test.go`).
+
+---
+
 ## [0.12.0] - 2026-09-26
 
 ### Added

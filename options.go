@@ -4,6 +4,7 @@ import (
 	"time"
 
 	"github.com/cuprite-io/flux/internal/cache"
+	"github.com/cuprite-io/flux/internal/history"
 	"github.com/cuprite-io/flux/internal/profiler"
 	"github.com/cuprite-io/flux/internal/schematap"
 	"github.com/cuprite-io/flux/internal/sink"
@@ -142,6 +143,40 @@ func WithSinkType(st string) SinkOption {
 // WithSinkTags attaches descriptive tags to a sink.
 func WithSinkTags(tags ...string) SinkOption {
 	return sink.WithTags(tags...)
+}
+
+// WithHistory enables historical alert retention directly in CacheBackend.
+func WithHistory(enable bool, cfg ...history.Config) Option {
+	return func(e *Engine) {
+		e.historyEnabled = enable
+		if len(cfg) > 0 {
+			e.historyConfig = cfg[0]
+		} else {
+			e.historyConfig = history.DefaultConfig()
+		}
+		e.historyConfig.Enabled = enable
+	}
+}
+
+// WithHistoryTTL sets the rolling TTL retention duration for historical alert records in CacheBackend.
+func WithHistoryTTL(ttl time.Duration) Option {
+	return func(e *Engine) {
+		e.historyConfig.TTL = ttl
+	}
+}
+
+// WithHistoryMaxRecords sets the maximum number of historical alert records retained per circuit.
+func WithHistoryMaxRecords(max int) Option {
+	return func(e *Engine) {
+		e.historyConfig.MaxRecordsPerCircuit = max
+	}
+}
+
+// WithHistoryAsync toggles whether alert persistence executes asynchronously off the hot path.
+func WithHistoryAsync(async bool) Option {
+	return func(e *Engine) {
+		e.historyConfig.Async = async
+	}
 }
 
 

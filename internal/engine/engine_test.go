@@ -229,3 +229,73 @@ func BenchmarkEngine_TreeExecution(b *testing.B) {
 		_, _ = exec.ExecuteCircuit(context.Background(), circuit, sctx)
 	}
 }
+
+func TestEngine_StepSinkAlertHook(t *testing.T) {
+	comp, err := compiler.NewCompiler(nil)
+	if err != nil {
+		t.Fatalf("failed to create compiler: %v", err)
+	}
+
+	type capturedAlert struct {
+		circuitID string
+		nodeName  string
+		sinkName  string
+		condition string
+		payload   any
+	}
+
+	var captured []capturedAlert
+	hook := func(ctx context.Context, circuitID, nodeName, sinkName, condition string, payload any) {
+		captured = append(captured, capturedAlert{
+			circuitID: circuitID,
+			nodeName:  nodeName,
+			sinkName:  sinkName,
+			condition: condition,
+			payload:   payload,
+		})
+	}
+
+	exec := engine.NewExecutor(comp, pool.GetDefaultPool(), nil, engine.WithAlertHook(hook))
+
+	root := types.NewNode("alert_node").
+		Step(&types.StepDefinition{
+			Type:      types.StepSink,
+			SinkName:  "pager_handler",
+			Condition: "payload.status_code >= 500",
+		})
+
+	circuit := types.NewCircuit("circuit_web").WithRoot(root)
+
+	// 1. Non-firing event (status_code 200)
+	sctx1 := state.NewContext(context.Background(), map[string]any{"status_code": 200})
+	_, err = exec.ExecuteCircuit(context.Background(), circuit, sctx1)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(captured) != 0 {
+		t.Fatalf("expected 0 alerts, got %d", len(captured))
+	}
+
+	// 2. Firing event (status_code 503)
+	sctx2 := state.NewContext(context.Background(), map[string]any{"status_code": 503})
+	_, err = exec.ExecuteCircuit(context.Background(), circuit, sctx2)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if len(captured) != 1 {
+		t.Fatalf("expected 1 alert, got %d", len(captured))
+	}
+	if captured[0].circuitID != "circuit_web" {
+		t.Errorf("expected circuit_web, got %s", captured[0].circuitID)
+	}
+	if captured[0].nodeName != "alert_node" {
+		t.Errorf("expected alert_node, got %s", captured[0].nodeName)
+	}
+	if captured[0].sinkName != "pager_handler" {
+		t.Errorf("expected pager_handler, got %s", captured[0].sinkName)
+	}
+	if captured[0].condition != "payload.status_code >= 500" {
+		t.Errorf("expected condition, got %s", captured[0].condition)
+	}
+}

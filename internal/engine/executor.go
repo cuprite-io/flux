@@ -26,6 +26,9 @@ var (
 // SinkDispatcher defines the callback function to dispatch payloads to external sinks.
 type SinkDispatcher func(sinkName string, payload any) error
 
+// AlertHook is invoked whenever a StepSink condition is satisfied.
+type AlertHook func(ctx context.Context, circuitID, nodeName, sinkName, condition string, payload any)
+
 type setCompiledStmt struct {
 	key  string
 	prog cel.Program
@@ -41,6 +44,7 @@ type Executor struct {
 	compiler    *compiler.Compiler
 	workerPool  *pool.WorkerPool
 	sinkFn      SinkDispatcher
+	alertHook   AlertHook
 	scriptCache *cache.BoundedCache[string, *compiledVoltScript]
 	tracer      *telemetry.Tracer
 }
@@ -72,6 +76,13 @@ func WithExecutorTracer(tr *telemetry.Tracer) ExecutorOption {
 	}
 }
 
+// WithAlertHook configures an alert hook callback on the executor.
+func WithAlertHook(hook AlertHook) ExecutorOption {
+	return func(e *Executor) {
+		e.alertHook = hook
+	}
+}
+
 
 // ExecuteCircuit evaluates a single Circuit tree from root to leaves against the provided StateContext.
 func (e *Executor) ExecuteCircuit(ctx context.Context, circuit *types.Circuit, sctx *state.Context) (*types.SparkResult, error) {
@@ -94,7 +105,7 @@ func (e *Executor) ExecuteCircuit(ctx context.Context, circuit *types.Circuit, s
 	}
 
 	// Start execution from root node at bit index 0
-	e.executeNode(ctx, circuit.Root, sctx, 1<<0)
+	e.executeNode(ctx, circuit.ID, circuit.Root, sctx, 1<<0)
 
 	if sctx.IsAborted() {
 		err := ErrCircuitAborted
@@ -127,7 +138,7 @@ func (e *Executor) ExecuteCircuit(ctx context.Context, circuit *types.Circuit, s
 }
 
 // executeNode evaluates a node's condition, executes its sequential steps, and dispatches children.
-func (e *Executor) executeNode(ctx context.Context, node *types.Node, sctx *state.Context, nodeBit uint64) {
+func (e *Executor) executeNode(ctx context.Context, circuitID string, node *types.Node, sctx *state.Context, nodeBit uint64) {
 	gid := compiler.SetCurrentContext(ctx)
 	defer compiler.ClearCurrentContext(gid)
 
@@ -177,7 +188,7 @@ func (e *Executor) executeNode(ctx context.Context, node *types.Node, sctx *stat
 		if ctx.Err() != nil || sctx.IsAborted() {
 			return
 		}
-		if err := e.executeStep(ctx, step, sctx); err != nil {
+		if err := e.executeStep(ctx, circuitID, node.Name, step, sctx); err != nil {
 			sctx.AddError(fmt.Errorf("node %s step error: %w", node.Name, err))
 		}
 	}
@@ -194,7 +205,7 @@ func (e *Executor) executeNode(ctx context.Context, node *types.Node, sctx *stat
 		if childBit == 0 {
 			childBit = 1
 		}
-		e.executeNode(ctx, node.Children[0], sctx, childBit)
+		e.executeNode(ctx, circuitID, node.Children[0], sctx, childBit)
 		return
 	}
 
@@ -219,7 +230,7 @@ func (e *Executor) executeNode(ctx context.Context, node *types.Node, sctx *stat
 
 		e.workerPool.Submit(func() {
 			defer latch.CountDown()
-			e.executeNode(ctx, childNode, childCtx, childBit)
+			e.executeNode(ctx, circuitID, childNode, childCtx, childBit)
 		})
 	}
 
@@ -265,7 +276,7 @@ func (e *Executor) getOrCompileScript(script string) (*compiledVoltScript, error
 }
 
 // executeStep executes a single StepDefinition within a node.
-func (e *Executor) executeStep(ctx context.Context, step *types.StepDefinition, sctx *state.Context) error {
+func (e *Executor) executeStep(ctx context.Context, circuitID, nodeName string, step *types.StepDefinition, sctx *state.Context) error {
 	var span trace.Span
 	if e.tracer.IsEnabled() && step.Type != types.StepSink { // sink steps manage their own span with payload info
 		spanName := "flux.step:" + strings.ToLower(step.Type.String())
@@ -334,21 +345,26 @@ func (e *Executor) executeStep(ctx context.Context, step *types.StepDefinition, 
 				return err
 			}
 		}
-		if e.sinkFn != nil && step.SinkName != "" {
-			var payload any
-			if step.Payload != "" {
-				if val, found := sctx.Get(step.Payload); found {
+
+		var payload any
+		if step.Payload != "" {
+			if val, found := sctx.Get(step.Payload); found {
+				payload = val
+			} else if m, ok := sctx.OriginalInput.(map[string]any); ok {
+				if val, found := m[step.Payload]; found {
 					payload = val
-				} else if m, ok := sctx.OriginalInput.(map[string]any); ok {
-					if val, found := m[step.Payload]; found {
-						payload = val
-					}
 				}
 			}
-			if payload == nil {
-				payload = sctx.Snapshot()
-			}
+		}
+		if payload == nil {
+			payload = sctx.Snapshot()
+		}
 
+		if e.alertHook != nil {
+			e.alertHook(ctx, circuitID, nodeName, step.SinkName, step.Condition, payload)
+		}
+
+		if e.sinkFn != nil && step.SinkName != "" {
 			if e.tracer.IsEnabled() {
 				_, span := e.tracer.Start(ctx, "flux.sink:"+step.SinkName,
 					trace.WithAttributes(
