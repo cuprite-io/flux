@@ -149,6 +149,14 @@ func (e *Engine) Spark(ctx context.Context, payload any, tags ...string) (*types
 		prepCtx, prepSpan = e.tracer.Start(ctx, "flux.spark:prepare")
 	}
 
+	if e.schemaTap != nil {
+		primaryTag := "stream:default"
+		if len(tags) > 0 {
+			primaryTag = tags[0]
+		}
+		_ = e.schemaTap.Sample(prepCtx, primaryTag, payload)
+	}
+
 	circuits := e.registry.GetMatching(prepCtx, tags...)
 	if len(circuits) == 0 {
 		if prepSpan != nil {
@@ -165,14 +173,6 @@ func (e *Engine) Spark(ctx context.Context, payload any, tags ...string) (*types
 			telemetry.EndSpan(span, nil)
 		}
 		return res, nil
-	}
-
-	if e.schemaTap != nil {
-		primaryTag := "stream:default"
-		if len(tags) > 0 {
-			primaryTag = tags[0]
-		}
-		_ = e.schemaTap.Sample(prepCtx, primaryTag, payload)
 	}
 
 	normalizedInput := normalizeInput(payload)

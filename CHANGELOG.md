@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.11.1] - 2026-09-26
+
+### Changed
+
+- **Cold-Start Schema Sampling Prior to Circuit Matching** (`flux.go`, `schematap_test.go`):
+  - Moved `SchemaTap.Sample` execution in `Engine.Spark` ahead of the circuit resolution check (`len(circuits) == 0`).
+  - Enables autonomous cold-start / bootstrap learning: streams can now be sampled, profiled, and have their structural schemas inferred by `assay` even when zero circuits are registered for the target tags.
+  - Added `TestEngine_SchemaLearning_ZeroCircuitsBootstrap` test verifying accurate schema inference and tag resolution without pre-deployed circuits.
+
+---
+
 ## [0.11.0] - 2026-09-12
 
 ### Added

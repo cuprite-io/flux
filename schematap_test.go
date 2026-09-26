@@ -153,6 +153,48 @@ func TestEngine_SchemaLearning_StructInputs(t *testing.T) {
 	assert.Equal(t, "string", schema.Children["sensor_id"].Type)
 }
 
+func TestEngine_SchemaLearning_ZeroCircuitsBootstrap(t *testing.T) {
+	ctx := context.Background()
+
+	// Initialize Engine with SchemaLearning enabled - NO CIRCUITS REGISTERED
+	eng, err := flux.New(
+		flux.WithSchemaLearning(true),
+		flux.WithSchemaDiscriminators("level"),
+	)
+	require.NoError(t, err)
+	defer eng.Close()
+
+	payload := map[string]any{
+		"level":      "ERROR",
+		"error_code": 500,
+		"exception":  "NilPointerReference",
+		"active":     true,
+	}
+
+	// Spark with a tag that has zero matching circuits
+	for i := 0; i < 5; i++ {
+		res, sparkErr := eng.Spark(ctx, payload, "stream:bootstrap")
+		require.NoError(t, sparkErr)
+		assert.True(t, res.Passed)
+		assert.Empty(t, res.ExecutedCircuits)
+	}
+
+	tap := eng.SchemaTap()
+	require.NotNil(t, tap)
+	require.NoError(t, tap.Flush())
+
+	// Verify schema was successfully inferred even though zero circuits were executed
+	schema, err := tap.GetSchema(ctx, "stream:bootstrap:ERROR")
+	require.NoError(t, err)
+	require.NotNil(t, schema)
+	require.Contains(t, schema.Children, "error_code")
+	require.Contains(t, schema.Children, "exception")
+	require.Contains(t, schema.Children, "active")
+	assert.Equal(t, "number", schema.Children["error_code"].Type)
+	assert.Equal(t, "string", schema.Children["exception"].Type)
+	assert.Equal(t, "boolean", schema.Children["active"].Type)
+}
+
 func BenchmarkSpark_WithoutSchemaLearning(b *testing.B) {
 	ctx := context.Background()
 	eng, err := flux.New()
