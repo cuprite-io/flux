@@ -7,6 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.14.0] - 2026-09-30
+
+### Added
+
+- **Pluggable AIProvider Abstraction & Universal HTTP Wire Engine** (`autopilot`):
+  - Defined universal `autopilot.AIProvider` interface supporting multi-turn conversational reflection loops (`Generate(ctx, messages)`).
+  - Added conversational role abstraction (`RoleSystem`, `RoleUser`, `RoleAssistant`) and constructors (`SystemMessage`, `UserMessage`, `AssistantMessage`).
+  - Added `ProviderFunc` functional adapter allowing arbitrary closures, custom mock implementations, and enterprise SDKs to satisfy `AIProvider` in 3 lines of code.
+  - Added `GeneratePrompt` convenience helper for single-turn system/user prompt execution.
+  - Implemented zero-dependency `HTTPProvider` using Go's standard library (`net/http`, `encoding/json`), conforming to the universal OpenAI-compatible Chat Completions protocol (`POST .../chat/completions`).
+  - Added native, out-of-the-box support for **OpenRouter**, **Ollama**, **Google Gemini**, **OpenAI**, **DeepSeek**, **Groq**, **vLLM**, and internal AI gateways.
+  - Added convenience constructors: `NewOpenAICompatible`, `NewOpenRouter`, `NewOllama`, `NewOpenAI`, and `NewGemini`.
+  - Added functional options: `WithTimeout`, `WithTemperature`, `WithHeader`, and `WithHTTPClient`.
+  - Added comprehensive test suite with mock HTTP server testing auth headers, custom headers, temperature, multi-turn serialization, OpenAI error payloads, plain-text error bodies, empty choices, and context cancellations.
+
+---
+
 ## [0.13.0] - 2026-09-26
 
 ### Added
