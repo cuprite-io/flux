@@ -72,6 +72,7 @@ type Options struct {
 	MaxTreeDepth  int
 	MaxStepCount  int
 	CheckSinks    bool
+	AllowedSinks  []string
 	Strict        bool
 }
 
@@ -371,6 +372,22 @@ func (l *Linter) lintNode(
 					Node:     node.Name,
 					Message:  fmt.Sprintf("step %d (SINK) is missing mandatory sink name", sIdx),
 				})
+			} else if len(l.opts.AllowedSinks) > 0 {
+				found := false
+				for _, s := range l.opts.AllowedSinks {
+					if s == step.SinkName {
+						found = true
+						break
+					}
+				}
+				if !found {
+					res.Issues = append(res.Issues, Issue{
+						RuleID:   "LINT-051",
+						Severity: SeverityError,
+						Node:     node.Name,
+						Message:  fmt.Sprintf("step %d (SINK) references unregistered sink %q (registered sinks: %s)", sIdx, step.SinkName, strings.Join(l.opts.AllowedSinks, ", ")),
+					})
+				}
 			}
 
 		case types.StepReturn:

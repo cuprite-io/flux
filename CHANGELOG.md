@@ -7,6 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.16.0] - 2026-10-01
+
+### Added
+
+- **Compiler Guardrails & Autonomous Reflection Loop** (`internal/autopilot`):
+  - Implemented `Synthesizer.SynthesizeWithReflection` featuring an autonomous multi-turn self-correction loop that queries the AI provider, validates the candidate DAG against compiler guardrails, and feeds diagnostics back to the LLM to self-repair (up to `maxRetries`, default: 3).
+  - Added structured `CorrectionHistory` tracking per-attempt diagnostics, stage identifiers, and node context.
+  - Added multi-stage verification tests and automated reflection recovery tests (`internal/autopilot/validator_test.go`, `internal/autopilot/reflection_test.go`).
+
+- **Unified Circuit Validation & Canonical Declarative Parser** (`internal/declarative`, `internal/linter`, `declarative.go`, `internal/autopilot`):
+  - Extracted declarative JSON/YAML parsing into `internal/declarative` as the single canonical parser shared across root `flux` and internal subsystems, eliminating duplicate parsing code.
+  - Extended `internal/linter` with `AllowedSinks` configuration and `LINT-051` rule to validate sink registration.
+  - Established `internal/linter` as the single source of truth for DAG static analysis and VoltScript compilation, eliminating duplicate AST traversal in `internal/autopilot/validator.go`.
+  - Maintained 100% backward compatibility for root `flux.LoadCircuitJSON`, `flux.LoadCircuitFile`, and related loader functions.
+
+---
+
 ## [0.15.0] - 2026-10-01
 
 ### Added
