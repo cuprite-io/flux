@@ -7,6 +7,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.15.0] - 2026-10-01
+
+### Added
+
+- **Prompt Engineering & Declarative DAG Synthesizer** (`internal/autopilot`):
+  - Implemented `PromptBuilder` assembling system prompts with the complete 10-category Volt/CEL operator catalog:
+    - Sliding windows (`window.count`) and distributed cache access (`cache.get`).
+    - State and map operations (`get`, `map.get`, `map.merge`, `map.delete`).
+    - PII detection and masking (`is_pii`, `mask.email`, `mask.card`, `mask`).
+    - Cryptography and encryption (`crypto.sha256/512`, `crypto.hmac`, `crypto.encrypt/decrypt` with AES-256-GCM).
+    - Geo-spatial navigation (`geo.dist_km`, `geo.dist_m`).
+    - Real-time ML anomaly and heuristic vector scoring (`ml.anomaly`, `ml.score`).
+    - Math and statistics (`math.clamp`, `math.stats`, `list.unique`, CEL math functions).
+    - Encodings and UUID generation (`uuid()`, `uuid.v4()`, `base64`, `hex`).
+    - Extended string manipulation and CEL standard methods.
+    - Relational, logical, and set membership (`in`) operators.
+  - Implemented schema tree formatter converting `assay.SchemaNode` structures to clean, structured outlines with field data types and required/optional indicators.
+  - Implemented value profile formatter extracting representative PII-sanitized exemplars, categorical frequency distributions, and numerical min/max ranges from `profiler.StreamProfile`.
+  - Implemented sink descriptor formatter detailing available destinations, severities, and protocols.
+  - Implemented `Synthesizer` dispatching structured requests to pluggable `autopilot.AIProvider` backends.
+  - Implemented robust `CleanJSON` extraction utility handling markdown code fences (```` ```json ````) and conversational preambles/postscripts.
+  - Added comprehensive test suite with race-detector coverage for prompt generation, JSON extraction, and end-to-end synthesis.
+
+---
+
 ## [0.14.0] - 2026-09-30
 
 ### Added
