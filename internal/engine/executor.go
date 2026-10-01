@@ -29,6 +29,9 @@ type SinkDispatcher func(sinkName string, payload any) error
 // AlertHook is invoked whenever a StepSink condition is satisfied.
 type AlertHook func(ctx context.Context, circuitID, nodeName, sinkName, condition string, payload any)
 
+// ShadowHook is invoked whenever a StepSink condition is satisfied in ShadowMode.
+type ShadowHook func(ctx context.Context, circuitID, nodeName, sinkName, condition string, payload any)
+
 type setCompiledStmt struct {
 	key  string
 	prog cel.Program
@@ -45,6 +48,7 @@ type Executor struct {
 	workerPool  *pool.WorkerPool
 	sinkFn      SinkDispatcher
 	alertHook   AlertHook
+	shadowHook  ShadowHook
 	scriptCache *cache.BoundedCache[string, *compiledVoltScript]
 	tracer      *telemetry.Tracer
 }
@@ -83,6 +87,27 @@ func WithAlertHook(hook AlertHook) ExecutorOption {
 	}
 }
 
+// WithShadowHook configures a shadow hook callback on the executor.
+func WithShadowHook(hook ShadowHook) ExecutorOption {
+	return func(e *Executor) {
+		e.shadowHook = hook
+	}
+}
+
+func isShadowCircuit(circuit *types.Circuit) bool {
+	if circuit == nil {
+		return false
+	}
+	if strings.HasPrefix(circuit.ID, "shadow:") {
+		return true
+	}
+	for _, tag := range circuit.Tags {
+		if tag == "shadow" || strings.HasPrefix(tag, "shadow:") {
+			return true
+		}
+	}
+	return false
+}
 
 // ExecuteCircuit evaluates a single Circuit tree from root to leaves against the provided StateContext.
 func (e *Executor) ExecuteCircuit(ctx context.Context, circuit *types.Circuit, sctx *state.Context) (*types.SparkResult, error) {
@@ -91,7 +116,12 @@ func (e *Executor) ExecuteCircuit(ctx context.Context, circuit *types.Circuit, s
 			OriginalInput:    sctx.OriginalInput,
 			Passed:           true,
 			ExecutedCircuits: nil,
+			ShadowFirings:    sctx.ShadowFirings(),
 		}, nil
+	}
+
+	if isShadowCircuit(circuit) {
+		sctx.SetShadowMode(true)
 	}
 
 	var span trace.Span
@@ -118,6 +148,7 @@ func (e *Executor) ExecuteCircuit(ctx context.Context, circuit *types.Circuit, s
 			ReturnedData:     sctx.ReturnData(),
 			Passed:           false,
 			ExecutedCircuits: []string{circuit.ID},
+			ShadowFirings:    sctx.ShadowFirings(),
 			Errors:           sctx.Errors(),
 		}, err
 	}
@@ -133,6 +164,7 @@ func (e *Executor) ExecuteCircuit(ctx context.Context, circuit *types.Circuit, s
 		ReturnedData:     sctx.ReturnData(),
 		Passed:           passed,
 		ExecutedCircuits: []string{circuit.ID},
+		ShadowFirings:    sctx.ShadowFirings(),
 		Errors:           sctx.Errors(),
 	}, nil
 }
@@ -358,6 +390,28 @@ func (e *Executor) executeStep(ctx context.Context, circuitID, nodeName string, 
 		}
 		if payload == nil {
 			payload = sctx.Snapshot()
+		}
+
+		if sctx.IsShadow() {
+			sctx.IncrementShadowFirings()
+
+			if e.shadowHook != nil {
+				e.shadowHook(ctx, circuitID, nodeName, step.SinkName, step.Condition, payload)
+			} else if e.alertHook != nil {
+				e.alertHook(ctx, circuitID, nodeName, step.SinkName, step.Condition, payload)
+			}
+
+			if e.tracer.IsEnabled() {
+				_, span := e.tracer.Start(ctx, "flux.sink.shadow:"+step.SinkName,
+					trace.WithAttributes(
+						telemetry.AttrSinkName.String(step.SinkName),
+						telemetry.AttrStepType.String("sink_shadow"),
+						attribute.Bool("flux.shadow", true),
+					),
+				)
+				telemetry.EndSpan(span, nil)
+			}
+			return nil
 		}
 
 		if e.alertHook != nil {

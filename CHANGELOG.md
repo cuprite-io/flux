@@ -7,6 +7,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.17.0] - 2026-10-01
+
+### Added
+
+- **Shadow Execution Mode in Engine Executor** (`internal/engine`, `internal/state`, `types`, `flux`):
+  - Added lock-free `ShadowMode bool` flag and atomic `shadowFirings uint64` counter to `state.Context`.
+  - Added shadow context lifecycle support: pool clearing in `AcquireContext`/`ReleaseContext`, shadow mode inheritance in `Fork()`, and cross-goroutine shadow firing aggregation in `MergeChild()`.
+  - Added `types.SparkResult.ShadowFirings` and `types.StateContext.ShadowMode`/`ShadowFirings` exported fields.
+  - Implemented automatic shadow circuit detection in `Executor.ExecuteCircuit` via `shadow:` circuit ID prefix or `shadow` tag membership.
+  - Implemented `StepSink` suppression in shadow mode: full Volt DAG evaluation, conditions, calculations, and state mutations proceed normally while external network dispatches (Slack, PagerDuty, webhooks) are safely suppressed.
+  - Added `ShadowHook` callback and `WithShadowHook` executor option to intercept would-be alerts for telemetry and evaluation without triggering external side effects.
+
+- **Automatic Shadow Staging & Firing-Rate Auto-Promoter** (`internal/autopilot`):
+  - Implemented `Stager` coordinating candidate circuit evaluation, safety verification, and automatic promotion.
+  - Added `StagingSession` tracking candidate circuit observations over live streaming traffic or batch events.
+  - Implemented candidate registration with temporary tag `shadow:<circuit_id>` to seamlessly observe live traffic in shadow mode.
+  - Added configurable safety envelope enforcement (`StagingConfig`, `WithEvaluationEvents`, `WithMinTargetFiringRate`, `WithMaxTargetFiringRate`, `WithAlertStormThreshold`, `WithAutoPromote`):
+    - Rejection of alert storms exceeding threshold (default: > 5.0%) with automatic circuit cleanup from `Registry`.
+    - Rejection of ineffective rules with 0% firings despite error logs observed in traffic.
+    - Zero-downtime automatic promotion to `Live` in `Registry` (removing temporary shadow tags) when observed firing rate is within safe bounds (default: 0.01% – 2.0%).
+  - Added `EvaluateBatch` helper to synchronously evaluate candidate circuits against event batches.
+  - Added `IsErrorEvent` payload analyzer detecting 5xx status codes, log severity levels (`error`, `fatal`, `critical`), and error strings across maps, JSON, and structs.
+
+---
+
 ## [0.16.0] - 2026-10-01
 
 ### Added

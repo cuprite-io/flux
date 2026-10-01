@@ -383,6 +383,7 @@ func (e *Engine) Spark(ctx context.Context, payload any, tags ...string) (*types
 			if len(res.Errors) > 0 {
 				combinedResult.Errors = append(combinedResult.Errors, res.Errors...)
 			}
+			combinedResult.ShadowFirings += res.ShadowFirings
 		}
 	}
 

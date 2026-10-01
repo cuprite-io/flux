@@ -79,6 +79,10 @@ type Context struct {
 	deadMask uint64
 	aborted  uint32 // 0 = active, 1 = aborted
 
+	// Shadow execution mode & firings counter
+	ShadowMode    bool
+	shadowFirings uint64
+
 	errorsMu sync.Mutex
 	errors   []error
 }
@@ -103,6 +107,8 @@ func AcquireContext(ctx context.Context, input any) *Context {
 	c.SecondaryInput = nil
 	c.deadMask = 0
 	c.aborted = 0
+	c.ShadowMode = false
+	atomic.StoreUint64(&c.shadowFirings, 0)
 	c.errors = nil
 	c.returnData = nil
 	return c
@@ -119,6 +125,8 @@ func AcquireLayeredContext(ctx context.Context, base any, layer map[string]any) 
 	c.SecondaryInput = layer
 	c.deadMask = 0
 	c.aborted = 0
+	c.ShadowMode = false
+	atomic.StoreUint64(&c.shadowFirings, 0)
 	c.errors = nil
 	c.returnData = nil
 	return c
@@ -134,6 +142,8 @@ func ReleaseContext(c *Context) {
 	c.SecondaryInput = nil
 	c.returnData = nil
 	c.errors = nil
+	c.ShadowMode = false
+	atomic.StoreUint64(&c.shadowFirings, 0)
 	c.mu.Lock()
 	clear(c.scratchpad)
 	clear(c.deltas)
@@ -154,6 +164,8 @@ func NewContext(ctx context.Context, input any) *Context {
 		returnData:    nil,
 		deadMask:      0,
 		aborted:       0,
+		ShadowMode:    false,
+		shadowFirings: 0,
 		errors:        nil,
 	}
 }
@@ -177,6 +189,8 @@ func (c *Context) Fork() *Context {
 		returnData:    c.returnData,
 		deadMask:      atomic.LoadUint64(&c.deadMask),
 		aborted:       atomic.LoadUint32(&c.aborted),
+		ShadowMode:    c.ShadowMode,
+		shadowFirings: 0,
 		errors:        nil,
 	}
 }
@@ -209,6 +223,10 @@ func (c *Context) MergeChild(child *Context) {
 		atomic.StoreUint32(&c.aborted, 1)
 	}
 
+	if childFirings := atomic.LoadUint64(&child.shadowFirings); childFirings > 0 {
+		atomic.AddUint64(&c.shadowFirings, childFirings)
+	}
+
 	child.errorsMu.Lock()
 	if len(child.errors) > 0 {
 		c.errorsMu.Lock()
@@ -216,6 +234,26 @@ func (c *Context) MergeChild(child *Context) {
 		c.errorsMu.Unlock()
 	}
 	child.errorsMu.Unlock()
+}
+
+// SetShadowMode enables or disables shadow observation mode on the context.
+func (c *Context) SetShadowMode(shadow bool) {
+	c.ShadowMode = shadow
+}
+
+// IsShadow reports whether the context is running in shadow observation mode.
+func (c *Context) IsShadow() bool {
+	return c.ShadowMode
+}
+
+// IncrementShadowFirings atomically increments and returns the shadow sink firing counter.
+func (c *Context) IncrementShadowFirings() uint64 {
+	return atomic.AddUint64(&c.shadowFirings, 1)
+}
+
+// ShadowFirings returns the current count of shadow sink firings recorded in this context.
+func (c *Context) ShadowFirings() uint64 {
+	return atomic.LoadUint64(&c.shadowFirings)
 }
 
 // Get retrieves a variable from Scratchpad, SecondaryInput, or OriginalInput map/struct.
@@ -466,6 +504,8 @@ func (c *Context) ExportType() *types.StateContext {
 		ReturnData:    ret,
 		DeadMask:      atomic.LoadUint64(&c.deadMask),
 		Aborted:       atomic.LoadUint32(&c.aborted) == 1,
+		ShadowMode:    c.ShadowMode,
+		ShadowFirings: atomic.LoadUint64(&c.shadowFirings),
 		Errors:        errs,
 	}
 }

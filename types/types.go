@@ -160,6 +160,7 @@ type SparkResult struct {
 	Passed           bool           // True if all non-aborted matching Circuits executed
 	ExecutedCircuits []string       // IDs of Circuits that matched and executed
 	TriggeredSinks   []string       // IDs of Sinks triggered during execution
+	ShadowFirings    uint64         // Count of StepSink firings intercepted in shadow mode
 	Errors           []error        // Any runtime/step errors encountered
 }
 
@@ -209,6 +210,8 @@ type StateContext struct {
 	ReturnData    map[string]any
 	DeadMask      uint64 // Bitmask tracking pruned branches (bit N == 1 -> node N is dead)
 	Aborted       bool
+	ShadowMode    bool   // True if circuit is evaluated in shadow observation mode
+	ShadowFirings uint64 // Intercepted shadow sink triggers
 	Errors        []error
 }
 
