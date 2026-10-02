@@ -7,8 +7,10 @@ import (
 	"errors"
 	"fmt"
 	"reflect"
+	"slices"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/cuprite-io/flux/internal/cache"
@@ -46,8 +48,13 @@ type Engine struct {
 	profiler       *profiler.Profiler
 	historyEnabled bool
 	historyConfig  history.Config
-	history        *history.Store
-	tracer         *telemetry.Tracer
+	history          *history.Store
+	tracer           *telemetry.Tracer
+	observersMu      sync.RWMutex
+	nextObserverID   uint64
+	sparkObservers   map[uint64]func(payload any, tags []string, res *types.SparkResult)
+	autopilotMu      sync.RWMutex
+	autopilotHandles []*AutopilotHandle
 }
 
 // New creates and initializes a new Flux Engine.
@@ -58,6 +65,7 @@ func New(opts ...Option) (*Engine, error) {
 		schemaConfig:   schematap.DefaultConfig(),
 		profilerConfig: profiler.DefaultConfig(),
 		historyConfig:  history.DefaultConfig(),
+		sparkObservers: make(map[uint64]func(payload any, tags []string, res *types.SparkResult)),
 	}
 
 	for _, opt := range opts {
@@ -232,6 +240,14 @@ func (e *Engine) SinkDescriptor(name string) (sink.Descriptor, bool) {
 // Close gracefully stops the Engine and drains all background queues.
 // If the cache backend was externally supplied via WithCache, it is left open.
 func (e *Engine) Close() error {
+	e.autopilotMu.Lock()
+	handles := slices.Clone(e.autopilotHandles)
+	e.autopilotHandles = nil
+	e.autopilotMu.Unlock()
+	for _, h := range handles {
+		_ = h.Stop(context.Background())
+	}
+
 	if e.history != nil {
 		_ = e.history.Close()
 	}
@@ -253,12 +269,52 @@ func (e *Engine) Close() error {
 	return nil
 }
 
+func (e *Engine) addSparkObserver(obs func(payload any, tags []string, res *types.SparkResult)) func() {
+	e.observersMu.Lock()
+	defer e.observersMu.Unlock()
+	if e.sparkObservers == nil {
+		e.sparkObservers = make(map[uint64]func(payload any, tags []string, res *types.SparkResult))
+	}
+	e.nextObserverID++
+	id := e.nextObserverID
+	e.sparkObservers[id] = obs
+	return func() {
+		e.observersMu.Lock()
+		defer e.observersMu.Unlock()
+		delete(e.sparkObservers, id)
+	}
+}
+
+func (e *Engine) notifySparkObservers(payload any, tags []string, res *types.SparkResult) {
+	e.observersMu.RLock()
+	if len(e.sparkObservers) == 0 {
+		e.observersMu.RUnlock()
+		return
+	}
+	observers := make([]func(payload any, tags []string, res *types.SparkResult), 0, len(e.sparkObservers))
+	for _, obs := range e.sparkObservers {
+		observers = append(observers, obs)
+	}
+	e.observersMu.RUnlock()
+
+	for _, obs := range observers {
+		obs(payload, tags, res)
+	}
+}
+
 // Spark evaluates an incoming payload sequentially across all matching Circuits.
 // Input must strictly be JSON ([]byte/string), Go slice, or Go struct.
 func (e *Engine) Spark(ctx context.Context, payload any, tags ...string) (*types.SparkResult, error) {
 	if err := ValidateInput(payload); err != nil {
 		return nil, err
 	}
+
+	var finalRes *types.SparkResult
+	defer func() {
+		if finalRes != nil {
+			e.notifySparkObservers(payload, tags, finalRes)
+		}
+	}()
 
 	var span trace.Span
 	if e.tracer.IsEnabled() {
@@ -306,6 +362,7 @@ func (e *Engine) Spark(ctx context.Context, payload any, tags ...string) (*types
 			span.SetAttributes(telemetry.AttrPassed.Bool(true))
 			telemetry.EndSpan(span, nil)
 		}
+		finalRes = res
 		return res, nil
 	}
 
@@ -329,6 +386,7 @@ func (e *Engine) Spark(ctx context.Context, payload any, tags ...string) (*types
 				span.SetAttributes(telemetry.AttrPassed.Bool(res.Passed))
 				telemetry.EndSpan(span, err)
 			}
+			finalRes = res
 			return res, err
 		}
 		sparkRes := &types.SparkResult{
@@ -342,6 +400,7 @@ func (e *Engine) Spark(ctx context.Context, payload any, tags ...string) (*types
 			span.SetAttributes(telemetry.AttrPassed.Bool(sparkRes.Passed))
 			telemetry.EndSpan(span, err)
 		}
+		finalRes = sparkRes
 		return sparkRes, err
 	}
 
@@ -392,6 +451,7 @@ func (e *Engine) Spark(ctx context.Context, payload any, tags ...string) (*types
 		telemetry.EndSpan(span, nil)
 	}
 
+	finalRes = combinedResult
 	return combinedResult, nil
 }
 

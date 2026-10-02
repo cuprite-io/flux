@@ -7,7 +7,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
-## [0.18.0] - 2026-10-01
+## [0.19.0] - 2026-10-02
+
+### Added
+
+- **Unified Public Engine API: `Engine.Autopilot()` & `AutopilotHandle`** (`flux`):
+  - Added public `Autopilot` entrypoint to `Engine`:
+    ```go
+    func (e *Engine) Autopilot(ctx context.Context, prompt string, provider autopilot.AIProvider, tags []string, opts ...AutopilotOption) (*AutopilotHandle, error)
+    ```
+  - Orchestrates complete autonomous lifecycle across cold-start sampling, schema inference, DAG synthesis with reflection, shadow mode verification, and zero-downtime auto-promotion.
+  - Added `AutopilotHandle` with `Status()`, `ActiveCircuits()`, `CurrentCircuit()`, `StagingResult()`, `WaitUntil()`, `RecordFeedback()`, `TriggerRefinement()`, and `Stop()`.
+  - Added configurable options: `WithSampleThreshold`, `WithShadowEvaluationEvents`, `WithMinTargetFiringRate`, `WithMaxTargetFiringRate`, `WithAlertStormThreshold`, `WithAutoPromotion`, `WithRefinementInterval`, `WithEvaluationBatch`, `WithLeaderElector`, and `WithMaxReflectionRetries`.
+  - Implemented real-time `Spark` observer dispatch pattern in `Engine` for zero-overhead streaming telemetry and shadow verification.
+  - Automatically initializes underlying schema tap, profiler, and history stores on demand if omitted during Engine instantiation.
+  - Coordinated graceful cleanup of active Autopilot sessions in `Engine.Close()`.
+
+---
+
+## [0.18.0] - 2026-10-02
 
 ### Added
 
