@@ -579,8 +579,6 @@ func (h *AutopilotHandle) runSession(ctx context.Context) {
 	}
 
 	// 4. Shadow Verification Phase
-	h.setStatus(StatusShadowing)
-
 	stager := internalautopilot.NewStager(h.engine.registry,
 		internalautopilot.WithEvaluationEvents(h.cfg.ShadowEvaluationEvents),
 		internalautopilot.WithMinTargetFiringRate(h.cfg.MinTargetFiringRate),
@@ -592,6 +590,7 @@ func (h *AutopilotHandle) runSession(ctx context.Context) {
 	var stagingRes *internalautopilot.StagingResult
 
 	if len(h.cfg.EvaluationBatch) > 0 {
+		h.setStatus(StatusShadowing)
 		// Offline evaluation against batch events
 		res, err := stager.EvaluateBatch(ctx, candidate, h.tags, h.engine.executor, h.cfg.EvaluationBatch)
 		if err != nil {
@@ -633,6 +632,9 @@ func (h *AutopilotHandle) runSession(ctx context.Context) {
 				}
 			}
 		})
+
+		// Notify status after observer is fully registered
+		h.setStatus(StatusShadowing)
 
 		select {
 		case <-ctx.Done():

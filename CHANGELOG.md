@@ -7,6 +7,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.20.0] - 2026-10-02
+
+### Added
+
+- **End-to-End Autonomous Log Monitoring Integration Demo & Tests** (`examples/06_autonomous_log_monitor`, `integration_test.go`):
+  - Created complete runnable demonstration `examples/06_autonomous_log_monitor/main.go` and comprehensive documentation in `README.md`.
+  - Verifies the complete 6-phase autonomous lifecycle: cold-start sampling, AI synthesis, shadow staging, zero-downtime promotion to Live, real-time alert dispatch to Slack and PagerDuty, operator feedback tagging, and closed-loop circuit refinement.
+  - Supports embedded autonomous synthesis simulator out-of-the-box, as well as live OpenAI, Gemini, and Ollama backends.
+  - Added end-to-end integration test `TestEndToEnd_AutonomousLogMonitoring` in `integration_test.go` validating the full loop under live streaming conditions.
+
+### Fixed
+
+- **History Store MapGetScan Fallback** (`internal/history/store.go`):
+  - Added graceful fallback to `MapGetAll` and JSON deserialization when the underlying `CacheBackend` does not support direct struct scanning targets, ensuring compatibility across all distributed cache backends.
+- **Autopilot Shadowing Notification Synchronization** (`autopilot.go`):
+  - Ensured `StatusShadowing` state transition is signaled only after the staging session and engine spark observers are fully registered, eliminating race conditions during rapid streaming event ingestion.
+
+---
+
 ## [0.19.0] - 2026-10-02
 
 ### Added

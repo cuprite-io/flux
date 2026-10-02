@@ -295,13 +295,25 @@ func (s *Store) GetAlert(ctx context.Context, circuitID, alertID string) (*Alert
 	historyKey := "alert:history:" + circuitID
 	var rec AlertRecord
 	found, err := s.backend.MapGetScan(ctx, historyKey, alertID, &rec)
-	if err != nil {
-		return nil, err
-	}
-	if !found {
-		return nil, fmt.Errorf("history: alert %s not found in circuit %s", alertID, circuitID)
+	if err == nil {
+		if !found {
+			return nil, fmt.Errorf("history: alert %s not found in circuit %s", alertID, circuitID)
+		}
+		return &rec, nil
 	}
 
+	// Fallback to MapGetAll if backend does not support struct scan targets
+	all, errAll := s.backend.MapGetAll(ctx, historyKey)
+	if errAll != nil {
+		return nil, err
+	}
+	raw, ok := all[alertID]
+	if !ok {
+		return nil, fmt.Errorf("history: alert %s not found in circuit %s", alertID, circuitID)
+	}
+	if err := json.Unmarshal([]byte(raw), &rec); err != nil {
+		return nil, err
+	}
 	return &rec, nil
 }
 

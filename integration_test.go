@@ -3,11 +3,15 @@ package flux_test
 import (
 	"context"
 	"os"
+	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/cuprite-io/capacitor"
 	"github.com/cuprite-io/flux"
+	"github.com/cuprite-io/flux/autopilot"
+	"github.com/cuprite-io/flux/internal/sink"
 	"github.com/cuprite-io/flux/types"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -144,4 +148,184 @@ func TestDistributed_CapacitorReplicationConvergence(t *testing.T) {
 	assert.Equal(t, "offer_titan_slayer", conductRes.Items[0].ID)
 	assert.Equal(t, "TITAN_SLAYER", conductRes.Items[0].ComputedOutput["tier"])
 	assert.Equal(t, float64(500), conductRes.Items[0].ComputedOutput["bonus_gems"])
+}
+
+func TestEndToEnd_AutonomousLogMonitoring(t *testing.T) {
+	ctx := context.Background()
+
+	// 1. Boot Capacitor storage node
+	dir, err := os.MkdirTemp("", "capacitor-autopilot-integration-*")
+	require.NoError(t, err)
+	defer os.RemoveAll(dir)
+
+	cp, err := capacitor.New(capacitor.Config{
+		NodeID:     "autopilot-test-node",
+		DataPath:   dir,
+		BindPort:   19711,
+		StreamPort: 19712,
+	})
+	require.NoError(t, err)
+	defer cp.Close()
+
+	// 2. Initialize Flux Engine
+	eng, err := flux.New(
+		flux.WithCache(cp),
+		flux.WithWorkers(4),
+		flux.WithHistory(true),
+	)
+	require.NoError(t, err)
+	defer eng.Close()
+
+	// 3. Register sinks
+	var slackCalls, pagerDutyCalls int64
+	eng.RegisterSink("slack_ops", sink.FuncSink(func(ctx context.Context, payload any) error {
+		atomic.AddInt64(&slackCalls, 1)
+		return nil
+	}))
+	eng.RegisterSink("pagerduty_critical", sink.FuncSink(func(ctx context.Context, payload any) error {
+		atomic.AddInt64(&pagerDutyCalls, 1)
+		return nil
+	}))
+
+	// 4. Setup mock AI provider that supports initial synthesis and refinement
+	provider := autopilot.ProviderFunc(func(ctx context.Context, messages []autopilot.Message) (string, error) {
+		for _, m := range messages {
+			if strings.Contains(m.Content, "OPERATOR FEEDBACK") || strings.Contains(m.Content, "REFINEMENT") {
+				return `{
+  "id": "autolog_rule",
+  "tags": ["stream:logs"],
+  "root": {
+    "name": "eval_root",
+    "condition": "(payload.status_code >= 500 && payload.status_code != 503) || payload.level == 'fatal'",
+    "steps": [
+      {
+        "type": "sink",
+        "sink": "pagerduty_critical",
+        "condition": "payload.level == 'fatal'",
+        "payload": "payload"
+      },
+      {
+        "type": "sink",
+        "sink": "slack_ops",
+        "condition": "payload.status_code >= 500 && payload.status_code != 503",
+        "payload": "payload"
+      }
+    ]
+  }
+}`, nil
+			}
+		}
+		return `{
+  "id": "autolog_rule",
+  "tags": ["stream:logs"],
+  "root": {
+    "name": "eval_root",
+    "condition": "payload.status_code >= 500 || payload.level == 'fatal'",
+    "steps": [
+      {
+        "type": "sink",
+        "sink": "pagerduty_critical",
+        "condition": "payload.level == 'fatal'",
+        "payload": "payload"
+      },
+      {
+        "type": "sink",
+        "sink": "slack_ops",
+        "condition": "payload.status_code >= 500",
+        "payload": "payload"
+      }
+    ]
+  }
+}`, nil
+	})
+
+	// 5. Launch Autopilot with cold-start sampling and shadow staging
+	handle, err := eng.Autopilot(
+		ctx,
+		"alert on 5xx and fatal logs",
+		provider,
+		[]string{"stream:logs"},
+		flux.WithSampleThreshold(10),
+		flux.WithShadowEvaluationEvents(10),
+		flux.WithMinTargetFiringRate(0.05),
+		flux.WithMaxTargetFiringRate(0.50),
+		flux.WithAlertStormThreshold(0.60),
+	)
+	require.NoError(t, err)
+	defer handle.Stop(context.Background())
+
+	assert.Equal(t, flux.StatusSampling, handle.Status())
+
+	// 6. Stream cold-start sampling events
+	for i := 0; i < 10; i++ {
+		_, _ = eng.Spark(ctx, map[string]any{"level": "info", "status_code": 200, "step": i}, "stream:logs")
+		time.Sleep(2 * time.Millisecond)
+	}
+
+	// Wait for synthesis to complete and enter shadow staging
+	waitShadow, cancelShadow := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancelShadow()
+	require.NoError(t, handle.WaitUntil(waitShadow, flux.StatusShadowing))
+
+	// 7. Stream shadow observation events: 2 errors (20%), 8 info
+	_, _ = eng.Spark(ctx, map[string]any{"level": "error", "status_code": 503, "msg": "transient timeout"}, "stream:logs")
+	_, _ = eng.Spark(ctx, map[string]any{"level": "fatal", "status_code": 500, "msg": "panic crash"}, "stream:logs")
+	for i := 0; i < 8; i++ {
+		_, _ = eng.Spark(ctx, map[string]any{"level": "info", "status_code": 200, "step": i}, "stream:logs")
+		time.Sleep(2 * time.Millisecond)
+	}
+
+	// 8. Wait for StatusLive
+	waitLive, cancelLive := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancelLive()
+	require.NoError(t, handle.WaitUntil(waitLive, flux.StatusLive))
+
+	assert.Equal(t, flux.StatusLive, handle.Status())
+	require.Len(t, handle.ActiveCircuits(), 1)
+	assert.Equal(t, "autolog_rule", handle.ActiveCircuits()[0])
+
+	// 9. Send live events and verify sink dispatches
+	atomic.StoreInt64(&slackCalls, 0)
+	atomic.StoreInt64(&pagerDutyCalls, 0)
+
+	_, err = eng.Spark(ctx, map[string]any{"level": "fatal", "status_code": 500, "msg": "critical crash"}, "stream:logs")
+	require.NoError(t, err)
+	_, err = eng.Spark(ctx, map[string]any{"level": "error", "status_code": 503, "msg": "transient fail"}, "stream:logs")
+	require.NoError(t, err)
+
+	time.Sleep(50 * time.Millisecond)
+	assert.GreaterOrEqual(t, atomic.LoadInt64(&pagerDutyCalls), int64(1))
+	assert.GreaterOrEqual(t, atomic.LoadInt64(&slackCalls), int64(1))
+
+	// 10. Record operator feedback on transient 503
+	require.NoError(t, eng.History().Flush())
+	alerts, err := eng.GetAlertHistory(ctx, "autolog_rule", 10)
+	require.NoError(t, err)
+	require.NotEmpty(t, alerts)
+
+	var targetAlertID string
+	for _, al := range alerts {
+		if code, ok := al.Payload["status_code"].(float64); ok && code == 503 {
+			targetAlertID = al.ID
+			break
+		}
+	}
+	if targetAlertID == "" {
+		targetAlertID = alerts[0].ID
+	}
+
+	err = handle.RecordFeedback(ctx, targetAlertID, flux.FeedbackFalsePositive, "transient deployment restart")
+	require.NoError(t, err)
+
+	// 11. Trigger closed-loop refinement
+	err = handle.TriggerRefinement(ctx, flux.TriggerUserFeedback, "operator marked 503 as false_positive")
+	require.NoError(t, err)
+
+	refinedCircuit := handle.CurrentCircuit()
+	require.NotNil(t, refinedCircuit)
+	assert.Contains(t, refinedCircuit.Root.Condition, "503")
+
+	// 12. Stop cleanly
+	require.NoError(t, handle.Stop(context.Background()))
+	assert.Equal(t, flux.StatusStopped, handle.Status())
 }
