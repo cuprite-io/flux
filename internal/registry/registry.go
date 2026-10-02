@@ -138,7 +138,7 @@ const (
 	tagSetPrefix   = "registry:tag:"
 )
 
-// Registry manages standalone Circuit storage and tag indexing directly in the CacheBackend (Capacitor).
+// Registry manages standalone Circuit storage and tag indexing directly in the CacheBackend.
 // It maintains ZERO local in-memory shadow copies, guaranteeing 100% multi-node cluster convergence.
 type Registry struct {
 	cacheBackend cache.CacheBackend
@@ -164,7 +164,7 @@ func (r *Registry) backend() cache.CacheBackend {
 	return r.fallback
 }
 
-// Put registers or updates a Circuit directly in Capacitor with zero shadow caching.
+// Put registers or updates a Circuit directly in CacheBackend with zero shadow caching.
 func (r *Registry) Put(ctx context.Context, circuit *types.Circuit) error {
 	if circuit == nil || circuit.ID == "" {
 		return errors.New("flux registry: circuit ID required")
@@ -194,12 +194,12 @@ func (r *Registry) Put(ctx context.Context, circuit *types.Circuit) error {
 		return fmt.Errorf("flux registry: failed to marshal circuit %s: %w", circuit.ID, err)
 	}
 
-	// 2. Store circuit in Capacitor's partitioned circuits map
+	// 2. Store circuit in CacheBackend's partitioned circuits map
 	if _, err := r.backend().MapSet(ctx, circuitsMapKey, circuit.ID, string(data), 0); err != nil {
 		return fmt.Errorf("flux registry: failed to store circuit %s: %w", circuit.ID, err)
 	}
 
-	// 3. Index new tags incrementally in Capacitor distributed sets
+	// 3. Index new tags incrementally in CacheBackend distributed sets
 	for _, tag := range circuit.Tags {
 		if tag != "" {
 			if _, err := r.backend().SetAdd(ctx, tagSetPrefix+tag, circuit.ID); err != nil {
@@ -211,7 +211,7 @@ func (r *Registry) Put(ctx context.Context, circuit *types.Circuit) error {
 	return nil
 }
 
-// Get retrieves a Circuit directly from Capacitor by its ID.
+// Get retrieves a Circuit directly from CacheBackend by its ID.
 func (r *Registry) Get(ctx context.Context, id string) (*types.Circuit, error) {
 	if id == "" {
 		return nil, ErrCircuitNotFound
@@ -235,7 +235,7 @@ func (r *Registry) Get(ctx context.Context, id string) (*types.Circuit, error) {
 	return nil, ErrCircuitNotFound
 }
 
-// GetMatching retrieves all Circuits that match any of the provided query tags directly from Capacitor.
+// GetMatching retrieves all Circuits that match any of the provided query tags directly from CacheBackend.
 func (r *Registry) GetMatching(ctx context.Context, tags ...string) []*types.Circuit {
 	if len(tags) == 0 {
 		return nil
@@ -321,7 +321,7 @@ func (r *Registry) GetMatching(ctx context.Context, tags ...string) []*types.Cir
 	return res
 }
 
-// Delete removes a Circuit by ID from Capacitor and clears its tag memberships.
+// Delete removes a Circuit by ID from CacheBackend and clears its tag memberships.
 func (r *Registry) Delete(ctx context.Context, id string) error {
 	if id == "" {
 		return ErrCircuitNotFound

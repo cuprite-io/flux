@@ -5,10 +5,13 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/cuprite-io/assay"
+	"github.com/cuprite-io/flux/internal/history"
 	"github.com/cuprite-io/flux/internal/profiler"
 	"github.com/cuprite-io/flux/internal/sink"
+	"github.com/cuprite-io/flux/types"
 )
 
 const baseSystemPrompt = `You are Flux Autopilot, an expert autonomous compiler and streaming architect for the Flux Stream Engine.
@@ -70,7 +73,7 @@ Variables in scope:
   Sliding window event frequency counter. E.g.: window.count('rate:5xx:' + payload.service, '60s')
   Duration formats: '10s', '30s', '60s', '5m', '1h', '24h'.
 - cache.get('<key>') -> string
-  Queries distributed Capacitor state store.
+  Queries distributed CacheBackend state store.
 
 2. State & Map Manipulation:
 - get(map, '<key>', fallback) / map.get(map, '<key>', fallback) -> any
@@ -343,3 +346,138 @@ func (b *PromptBuilder) formatProfile(sb *strings.Builder, prof *profiler.Stream
 	}
 	sb.WriteString("\n")
 }
+
+// BuildRefinementPrompt constructs a prompt to tune an existing active circuit based on
+// recent alerts, user feedback, schema drift, or firing rate anomalies.
+func (b *PromptBuilder) BuildRefinementPrompt(
+	userGoal string,
+	targetTags []string,
+	activeCircuit *types.Circuit,
+	trigger string,
+	reason string,
+	alerts []history.AlertRecord,
+	schemas map[string]*assay.SchemaNode,
+	profiles map[string]*profiler.StreamProfile,
+	sinks []sink.Descriptor,
+) string {
+	var sb strings.Builder
+
+	sb.WriteString("### REFINEMENT TASK\n")
+	sb.WriteString("You are tuning an existing active Flux Circuit in response to real production telemetry and feedback.\n")
+	sb.WriteString("Your goal is to modify the Circuit DAG to resolve the trigger/feedback while maintaining high detection accuracy.\n\n")
+
+	if userGoal != "" {
+		sb.WriteString("### ORIGINAL USER GOAL\n")
+		sb.WriteString(strings.TrimSpace(userGoal))
+		sb.WriteString("\n\n")
+	}
+
+	sb.WriteString("### REFINEMENT TRIGGER & MOTIVATION\n")
+	sb.WriteString(fmt.Sprintf("Trigger: %s\n", trigger))
+	sb.WriteString(fmt.Sprintf("Reason: %s\n\n", reason))
+
+	if activeCircuit != nil {
+		sb.WriteString("### CURRENT ACTIVE CIRCUIT (TO BE UPDATED)\n")
+		circuitBytes, err := json.MarshalIndent(activeCircuit, "", "  ")
+		if err == nil {
+			sb.WriteString(string(circuitBytes))
+		}
+		sb.WriteString("\n\n")
+	}
+
+	sb.WriteString("### TARGET STREAM TAGS\n")
+	if len(targetTags) == 0 && activeCircuit != nil {
+		targetTags = activeCircuit.Tags
+	}
+	for _, tag := range targetTags {
+		sb.WriteString(fmt.Sprintf("- %s\n", tag))
+	}
+	sb.WriteString("\n")
+
+	sb.WriteString("### RECENT ALERTS & OPERATOR FEEDBACK\n")
+	if len(alerts) == 0 {
+		sb.WriteString("No recent alert history available.\n\n")
+	} else {
+		for i, al := range alerts {
+			sb.WriteString(fmt.Sprintf("Alert #%d (ID: %s):\n", i+1, al.ID))
+			sb.WriteString(fmt.Sprintf("  Timestamp: %s\n", al.Timestamp.Format(time.RFC3339)))
+			sb.WriteString(fmt.Sprintf("  Node: %s, Sink: %s\n", al.NodeName, al.SinkName))
+			if al.Condition != "" {
+				sb.WriteString(fmt.Sprintf("  Condition: %s\n", al.Condition))
+			}
+			if al.Feedback != nil {
+				sb.WriteString(fmt.Sprintf("  *** OPERATOR FEEDBACK ***: Classification=%q", al.Feedback.Classification))
+				if al.Feedback.Reason != "" {
+					sb.WriteString(fmt.Sprintf(", Reason=%q", al.Feedback.Reason))
+				}
+				sb.WriteString("\n")
+			}
+			if len(al.Payload) > 0 {
+				pBytes, _ := json.Marshal(al.Payload)
+				sb.WriteString(fmt.Sprintf("  Payload: %s\n", string(pBytes)))
+			}
+			sb.WriteString("\n")
+		}
+	}
+
+	sb.WriteString("### INFERRED STREAM SCHEMAS (from assay)\n")
+	if len(schemas) == 0 {
+		sb.WriteString("No schema changes detected.\n\n")
+	} else {
+		keys := make([]string, 0, len(schemas))
+		for k := range schemas {
+			keys = append(keys, k)
+		}
+		sort.Strings(keys)
+		for _, k := range keys {
+			node := schemas[k]
+			sb.WriteString(fmt.Sprintf("Tag / Variant: %s\n", k))
+			b.formatSchemaNode(&sb, "payload", node, 1)
+			sb.WriteString("\n")
+		}
+	}
+
+	sb.WriteString("### STREAM VALUE PROFILES & EXEMPLARS (from profiler)\n")
+	if len(profiles) > 0 {
+		pKeys := make([]string, 0, len(profiles))
+		for k := range profiles {
+			pKeys = append(pKeys, k)
+		}
+		sort.Strings(pKeys)
+		for _, k := range pKeys {
+			prof := profiles[k]
+			b.formatProfile(&sb, prof)
+		}
+	}
+
+	sb.WriteString("### AVAILABLE SINK DESTINATIONS\n")
+	if len(sinks) > 0 {
+		sink.SortDescriptors(sinks)
+		for _, s := range sinks {
+			desc := s.Description
+			if desc == "" {
+				desc = "No description provided"
+			}
+			sev := s.Severity
+			if sev == "" {
+				sev = "info"
+			}
+			stype := s.SinkType
+			if stype == "" {
+				stype = "generic"
+			}
+			sb.WriteString(fmt.Sprintf("- Sink Name: %q\n  Description: %s\n  Severity: %s\n  Type: %s\n",
+				s.Name, desc, sev, stype))
+		}
+		sb.WriteString("\n")
+	}
+
+	sb.WriteString("### REFINEMENT INSTRUCTIONS\n")
+	sb.WriteString("1. If alerts were marked 'false_positive' or 'noisy', adjust the condition(s) or add steps to eliminate those false alerts.\n")
+	sb.WriteString("2. If new fields or types appeared in schema drift, leverage them if relevant to improve detection.\n")
+	sb.WriteString("3. If an alert storm occurred, tighten the threshold or require additional corroborating signals.\n")
+	sb.WriteString("4. Output ONLY valid raw JSON representing the complete refined Circuit DAG. Do NOT use markdown code fences.\n")
+
+	return sb.String()
+}
+

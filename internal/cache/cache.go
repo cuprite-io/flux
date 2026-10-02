@@ -14,7 +14,7 @@ var (
 )
 
 // CacheBackend defines the distributed cache and state interface required by Flux.
-// It matches the capabilities of *capacitor.Capacitor.
+// It matches the capabilities of Capacitor.
 type CacheBackend interface {
 	Get(ctx context.Context, key string) (string, error)
 	GetScan(ctx context.Context, key string, dst any) error
@@ -335,7 +335,6 @@ func (m *MemoryCache) MapIncrementBy(ctx context.Context, key, field string, del
 	mp[field] = strconv.FormatFloat(newVal, 'f', -1, 64)
 	return newVal, nil
 }
-
 
 func (m *MemoryCache) MapRemove(ctx context.Context, key, field string) (bool, error) {
 	m.mu.Lock()

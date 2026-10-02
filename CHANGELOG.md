@@ -7,6 +7,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.18.0] - 2026-10-01
+
+### Added
+
+- **Cluster Leader Election & Node Membership Heartbeats via CacheBackend** (`internal/cluster`):
+  - Created dedicated `internal/cluster` package with unified `LeaderElector` interface and `Elector` implementation.
+  - Implemented conflict-free node membership heartbeat protocol backed by `CacheBackend` map primitives (`MapSet`, `MapGetAll`, `MapRemove`).
+  - Each node writes heartbeats exclusively to its own node field, eliminating multi-node write contention and split-brain risks under eventual consistency.
+  - Automatically detects single-node (`len(activeNodes) == 1`) vs multi-node topologies without requiring separate implementations.
+  - Deterministic leadership election based on the lexicographically lowest active node ID, guaranteeing cluster-wide convergence across replicas.
+  - Implemented fast renewal, auto-failover on heartbeat TTL expiration, and zero-delay surrender via `StepDown`.
+  - Added lifecycle hooks `OnElected` and `OnRevoked` for distributed background worker coordination.
+  - Implemented continuous background broadcast loop with `Start` and graceful termination with `Stop`.
+
+- **Closed-Loop Autonomous Refinement & Drift Detector** (`internal/autopilot`):
+  - Implemented `Refiner` managing continuous background monitoring, tuning, and closed-loop circuit adaptation.
+  - Added support for 4 proactive triggers:
+    1. **User Feedback** (`RefineOnFeedback`): automatically updates rules when operators flag alerts as `false_positive`, `noisy`, or `valid`.
+    2. **Schema Drift** (`RefineOnSchemaDrift`): adapts circuits when `assay` detects new unmapped fields or schema mutations.
+    3. **Firing Rate Anomalies** (`RefineOnFiringAnomaly`): tunes rules when alert storms (>5%) or silence (0%) are detected.
+    4. **Scheduled Interval** (`RefineOnSchedule`): periodic maintenance review (default: every 24 hours).
+  - Added `BuildRefinementPrompt` to `PromptBuilder` incorporating active circuit DAG JSON, operator feedback, recent alert payloads, current schema outlines, and tuning instructions.
+  - Implemented optional shadow batch verification before hot-swapping: verifies refined candidate rules against sample telemetry before promotion.
+  - Implemented leader pod gating so scheduled refinements only run on the elected cluster leader.
+
+---
+
 ## [0.17.0] - 2026-10-01
 
 ### Added

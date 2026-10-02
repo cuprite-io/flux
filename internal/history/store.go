@@ -27,7 +27,7 @@ const (
 )
 
 // AlertRecord represents a single historical alert or sink dispatch event.
-// All records are stored directly in CacheBackend (Capacitor) to maintain a 100% stateless Flux core.
+// All records are stored directly in CacheBackend to maintain a 100% stateless Flux core.
 type AlertRecord struct {
 	ID        string         `json:"id"`
 	Timestamp time.Time      `json:"timestamp"`

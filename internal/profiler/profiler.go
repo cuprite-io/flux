@@ -20,7 +20,7 @@ import (
 )
 
 // StreamProfile aggregates recent sanitized exemplars, categorical frequencies, and numerical boundaries.
-// All underlying data is queried directly from CacheBackend (Capacitor), maintaining a 100% stateless Flux core.
+// All underlying data is queried directly from CacheBackend, maintaining a 100% stateless Flux core.
 type StreamProfile struct {
 	Tag          string                       `json:"tag"`
 	TotalSampled uint64                       `json:"total_sampled"`

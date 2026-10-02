@@ -43,7 +43,7 @@ func (c *Catalog) backend() cache.CacheBackend {
 	return c.fallback
 }
 
-// Put inserts or updates a candidate Item directly in Capacitor's Category-Partitioned Map.
+// Put inserts or updates a candidate Item directly in CacheBackend's Category-Partitioned Map.
 func (c *Catalog) Put(ctx context.Context, item *types.Item) error {
 	if item == nil || item.ID == "" {
 		return errors.New("flux catalog: item ID required")
