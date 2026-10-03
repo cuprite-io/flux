@@ -1,0 +1,349 @@
+package tui_test
+
+import (
+	"bytes"
+	"fmt"
+	"net/http"
+	"net/http/httptest"
+	"testing"
+	"time"
+
+	tea "github.com/charmbracelet/bubbletea"
+	"github.com/cuprite-io/flux/cmd/flux/tui"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+)
+
+func TestTUI_StandaloneMode_Initialization(t *testing.T) {
+	m := tui.NewModel(tui.Config{}) // Empty endpoint = standalone
+	m.SetDimensions(120, 40)
+
+	assert.False(t, m.IsCluster())
+	assert.Equal(t, tui.ViewCircuits, m.CurrentView())
+
+	viewOutput := m.View()
+	require.NotEmpty(t, viewOutput)
+	assert.Contains(t, viewOutput, "FLUX")
+	assert.Contains(t, viewOutput, "STANDALONE")
+	assert.Contains(t, viewOutput, "Circuits")
+	assert.Contains(t, viewOutput, "Dry-Run REPL")
+
+	// In Standalone mode, Cache and Cluster tabs are hidden from tab bar
+	assert.NotContains(t, viewOutput, "Cache / State")
+	assert.NotContains(t, viewOutput, "Cluster Nodes")
+}
+
+func TestTUI_ClusterMode_Initialization(t *testing.T) {
+	m := tui.NewModel(tui.Config{Endpoint: "10.0.1.45:9090", NodeID: "worker-1"})
+	m.SetDimensions(120, 40)
+
+	assert.True(t, m.IsCluster())
+	assert.Equal(t, tui.ViewCircuits, m.CurrentView())
+
+	viewOutput := m.View()
+	require.NotEmpty(t, viewOutput)
+	assert.Contains(t, viewOutput, "FLUX")
+	assert.Contains(t, viewOutput, "10.0.1.45:9090")
+	assert.Contains(t, viewOutput, "worker-1")
+	assert.Contains(t, viewOutput, "Cache / State")
+	assert.Contains(t, viewOutput, "Cluster Nodes")
+}
+
+func TestTUI_DynamicConnectAndDisconnect(t *testing.T) {
+	m := tui.NewModel(tui.Config{}) // starts standalone
+	m.SetDimensions(120, 40)
+	assert.False(t, m.IsCluster())
+
+	// 1. Try to connect to unreachable endpoint -> should fail and stay standalone
+	newM, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{':'}})
+	model := newM.(tui.Model)
+	for _, r := range "connect 127.0.0.1:54321" {
+		newM, _ = model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{r}})
+		model = newM.(tui.Model)
+	}
+	newM, _ = model.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	model = newM.(tui.Model)
+
+	assert.False(t, model.IsCluster(), "should remain in standalone mode when endpoint is unreachable")
+	assert.Contains(t, model.View(), "STANDALONE")
+	assert.Contains(t, model.View(), "Failed to connect")
+
+	// 2. Try unsupported scheme -> should fail immediately with explicit error
+	newM, _ = model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{':'}})
+	model = newM.(tui.Model)
+	for _, r := range "connect mysql://localhost:3306" {
+		newM, _ = model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{r}})
+		model = newM.(tui.Model)
+	}
+	newM, _ = model.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	model = newM.(tui.Model)
+	assert.False(t, model.IsCluster())
+	assert.Contains(t, model.View(), "unsupported scheme")
+
+	// 3. Test non-Flux server (e.g. returns HTML like Google.com) -> should be rejected
+	nonFluxServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/html")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`<html><body>Welcome to Google</body></html>`))
+	}))
+	defer nonFluxServer.Close()
+
+	newM, _ = model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{':'}})
+	model = newM.(tui.Model)
+	for _, r := range fmt.Sprintf("connect %s", nonFluxServer.URL) {
+		newM, _ = model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{r}})
+		model = newM.(tui.Model)
+	}
+	newM, _ = model.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	model = newM.(tui.Model)
+	assert.False(t, model.IsCluster(), "should reject non-Flux web servers")
+	assert.Contains(t, model.View(), "not a Flux Admin control plane")
+
+	// 4. Start a mock Flux Admin HTTP server with token verification and signature
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("X-Flux-Admin", "true")
+		if r.Header.Get("Authorization") == "Bearer bad-token" {
+			w.WriteHeader(http.StatusUnauthorized)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"service":"flux-admin","version":"0.21.0","cluster_nodes":3,"leader_id":"test-leader"}`))
+	}))
+	defer ts.Close()
+
+	// Connect with bad token -> auth required failure
+	newM, _ = model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{':'}})
+	model = newM.(tui.Model)
+	for _, r := range fmt.Sprintf("connect %s bad-token", ts.URL) {
+		newM, _ = model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{r}})
+		model = newM.(tui.Model)
+	}
+	newM, _ = model.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	model = newM.(tui.Model)
+	assert.False(t, model.IsCluster())
+	assert.Contains(t, model.View(), "authentication required")
+
+	// Connect with valid token -> success
+	newM, _ = model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{':'}})
+	model = newM.(tui.Model)
+	for _, r := range fmt.Sprintf("connect %s valid-token", ts.URL) {
+		newM, _ = model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{r}})
+		model = newM.(tui.Model)
+	}
+	newM, _ = model.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	model = newM.(tui.Model)
+
+	assert.True(t, model.IsCluster(), "should transition to cluster mode on successful connection")
+	assert.Contains(t, model.View(), ts.URL)
+	assert.Contains(t, model.View(), "Cache / State")
+
+	// 5. Test :token command
+	newM, _ = model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{':'}})
+	model = newM.(tui.Model)
+	for _, r := range "token updated-token-secret" {
+		newM, _ = model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{r}})
+		model = newM.(tui.Model)
+	}
+	newM, _ = model.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	model = newM.(tui.Model)
+	assert.Contains(t, model.View(), "token updated")
+
+	// 5. Run :disconnect
+	newM, _ = model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{':'}})
+	model = newM.(tui.Model)
+	for _, r := range "disconnect" {
+		newM, _ = model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{r}})
+		model = newM.(tui.Model)
+	}
+	newM, _ = model.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	model = newM.(tui.Model)
+
+	assert.False(t, model.IsCluster())
+	assert.Contains(t, model.View(), "STANDALONE")
+	assert.NotContains(t, model.View(), "Cache / State")
+}
+
+func TestTUI_ViewNavigation_Standalone(t *testing.T) {
+	m := tui.NewModel(tui.Config{})
+	m.SetDimensions(100, 30)
+
+	// Standalone visible views: 1:Circuits, 2:Eval, 3:Autopilot, 4:Alerts, ?:Help
+	// Switch to Eval via '2'
+	newM, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'2'}})
+	model := newM.(tui.Model)
+	assert.Equal(t, tui.ViewEval, model.CurrentView())
+	assert.Contains(t, model.View(), "Dry-Run Playground")
+
+	// Switch to Autopilot via '3'
+	newM, _ = model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'3'}})
+	model = newM.(tui.Model)
+	assert.Equal(t, tui.ViewAutopilot, model.CurrentView())
+
+	// Switch to Alerts via '4'
+	newM, _ = model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'4'}})
+	model = newM.(tui.Model)
+	assert.Equal(t, tui.ViewAlerts, model.CurrentView())
+
+	// Toggle Help via '?'
+	newM, _ = model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'?'}})
+	model = newM.(tui.Model)
+	assert.Equal(t, tui.ViewHelp, model.CurrentView())
+
+	// Back to previous via '?'
+	newM, _ = model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'?'}})
+	model = newM.(tui.Model)
+	assert.Equal(t, tui.ViewAlerts, model.CurrentView())
+}
+
+func TestTUI_ViewNavigation_Cluster(t *testing.T) {
+	m := tui.NewModel(tui.Config{Endpoint: "localhost:9090"})
+	m.SetDimensions(100, 30)
+
+	// Cluster visible views: 1:Circuits, 2:Autopilot, 3:Cache, 4:Eval, 5:Alerts, 6:Cluster
+	// Switch to Cache via '3'
+	newM, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'3'}})
+	model := newM.(tui.Model)
+	assert.Equal(t, tui.ViewCache, model.CurrentView())
+
+	// Switch to Cluster via '6'
+	newM, _ = model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'6'}})
+	model = newM.(tui.Model)
+	assert.Equal(t, tui.ViewCluster, model.CurrentView())
+}
+
+func TestTUI_SyncToggle(t *testing.T) {
+	// 1. In standalone, sync does nothing and explains cluster requirement
+	m := tui.NewModel(tui.Config{})
+	m.SetDimensions(100, 30)
+	newM, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'s'}})
+	model := newM.(tui.Model)
+	assert.Contains(t, model.View(), "Cluster Mode")
+
+	// 2. In cluster, sync toggles on and off
+	mCluster := tui.NewModel(tui.Config{Endpoint: "localhost:9090"})
+	mCluster.SetDimensions(100, 30)
+	assert.Contains(t, mCluster.View(), "Local Sync: OFF")
+
+	newM, _ = mCluster.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'s'}})
+	model = newM.(tui.Model)
+	assert.Contains(t, model.View(), "Local Sync: ON")
+
+	newM, _ = model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'s'}})
+	model = newM.(tui.Model)
+	assert.Contains(t, model.View(), "Local Sync: OFF")
+}
+
+func TestTUI_TickAndUpdate(t *testing.T) {
+	m := tui.NewModel(tui.Config{})
+	m.SetDimensions(100, 30)
+
+	now := time.Now()
+	newM, cmd := m.Update(tui.TickMsg(now))
+	require.NotNil(t, newM)
+	require.NotNil(t, cmd)
+}
+
+func TestTUI_ParseCommand(t *testing.T) {
+	tests := []struct {
+		input    string
+		expected tui.ViewID
+		ok       bool
+	}{
+		{":circuits", tui.ViewCircuits, true},
+		{":c", tui.ViewCircuits, true},
+		{":1", tui.ViewCircuits, true},
+		{":autopilot", tui.ViewAutopilot, true},
+		{":auto", tui.ViewAutopilot, true},
+		{":2", tui.ViewAutopilot, true},
+		{":cache", tui.ViewCache, true},
+		{":state", tui.ViewCache, true},
+		{":3", tui.ViewCache, true},
+		{":eval", tui.ViewEval, true},
+		{":dryrun", tui.ViewEval, true},
+		{":4", tui.ViewEval, true},
+		{":alerts", tui.ViewAlerts, true},
+		{":al", tui.ViewAlerts, true},
+		{":5", tui.ViewAlerts, true},
+		{":cluster", tui.ViewCluster, true},
+		{":nodes", tui.ViewCluster, true},
+		{":6", tui.ViewCluster, true},
+		{":help", tui.ViewHelp, true},
+		{":?", tui.ViewHelp, true},
+		{":unknown_cmd", tui.ViewCircuits, false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.input, func(t *testing.T) {
+			res, ok := tui.ParseCommand(tt.input)
+			assert.Equal(t, tt.ok, ok)
+			if ok {
+				assert.Equal(t, tt.expected, res)
+			}
+		})
+	}
+}
+
+func TestTUI_WindowTitle(t *testing.T) {
+	// Standalone mode title
+	mStandalone := tui.NewModel(tui.Config{})
+	assert.Equal(t, "flux cli", mStandalone.WindowTitle())
+
+	// Cluster mode title
+	mCluster := tui.NewModel(tui.Config{Endpoint: "10.0.1.45:9090"})
+	assert.Equal(t, "flux cli - 10.0.1.45:9090", mCluster.WindowTitle())
+
+	// Dynamic transition via mock server
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("X-Flux-Admin", "true")
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"service":"flux-admin","version":"0.21.0"}`))
+	}))
+	defer ts.Close()
+
+	m := tui.NewModel(tui.Config{})
+	assert.Equal(t, "flux cli", m.WindowTitle())
+
+	// Connect
+	newM, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{':'}})
+	model := newM.(tui.Model)
+	for _, r := range fmt.Sprintf("connect %s", ts.URL) {
+		newM, _ = model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{r}})
+		model = newM.(tui.Model)
+	}
+	newM, cmd := model.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	model = newM.(tui.Model)
+	assert.NotNil(t, cmd, "should emit WindowTitleCmd")
+	assert.Equal(t, fmt.Sprintf("flux cli - %s", ts.URL), model.WindowTitle())
+
+	// Disconnect
+	newM, _ = model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{':'}})
+	model = newM.(tui.Model)
+	for _, r := range "disconnect" {
+		newM, _ = model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{r}})
+		model = newM.(tui.Model)
+	}
+	newM, cmd = model.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	model = newM.(tui.Model)
+	assert.NotNil(t, cmd, "should emit WindowTitleCmd")
+	assert.Equal(t, "flux cli", model.WindowTitle())
+}
+
+func TestTUI_TitleStackSaveAndRestore(t *testing.T) {
+	var buf bytes.Buffer
+
+	// Test nil safety
+	tui.SaveWindowTitle(nil)
+	tui.RestoreWindowTitle(nil)
+
+	// Test escape sequence generation
+	tui.SaveWindowTitle(&buf)
+	assert.Equal(t, tui.SaveTitleSeq, buf.String())
+
+	buf.Reset()
+	tui.RestoreWindowTitle(&buf)
+	assert.Equal(t, tui.RestoreTitleSeq, buf.String())
+}
+
+

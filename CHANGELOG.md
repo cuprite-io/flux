@@ -7,6 +7,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.21.0] - 2026-10-03
+
+### Added
+
+- **Interactive Terminal Shell Architecture & Reactive Event Loop** (`cmd/flux`, `cmd/flux/tui`):
+  - Converted the `flux` binary into an interactive full-screen terminal console (TUI) powered by Bubble Tea and Lipgloss.
+  - Removed static CLI subcommands in favor of an integrated multi-view cockpit inspired by `k9s`.
+  - Implemented client-server control plane architecture: CLI connects to the Flux Admin API (`-e, --endpoint`) with zero local database dependencies.
+  - Implemented adaptive operating modes:
+    - **Standalone Mode** (default when no endpoint is supplied): Focused offline DAG development with local tabs (`Circuits`, `Dry-Run REPL`, `Autopilot`, `Live Alerts`, `Help`).
+    - **Cluster Mode** (when connecting to a remote endpoint): Full cluster monitoring with all tabs (`Circuits`, `Autopilot`, `Cache`, `Eval`, `Alerts`, `Cluster`, `Help`).
+  - Added in-shell dynamic cluster connection via `:connect <addr> [token]`, `:token <secret>`, and `:disconnect`.
+  - Added strict endpoint handshake validation: verifies URL scheme (`http://`, `https://`) and checks `/api/v1/status` for Flux service signatures, rejecting non-Flux servers.
+  - Added dynamic terminal window title rewriting (`flux cli` in Standalone mode, `flux cli - <addr>` in Cluster mode).
+  - Added terminal window title restoration on exit via the ANSI title stack (`\x1b[22;0t` push on launch, `\x1b[23;0t` pop on quit), guaranteeing the user's original terminal title is cleanly restored upon exit.
+  - Implemented persistent global header adapting to operating mode, displaying version, remote endpoint, cluster node count, leader ID, local sync state, and real-time clock.
+  - Implemented Vim-style `:` command launcher supporting view switching, `:connect`, `:disconnect`, and `:q`.
+  - Added full keyboard navigation with quick tab jumping, cycling (`Tab`/`Shift+Tab`, `[`/`]`), local sync toggle (`s`), view refresh (`r`), and interactive help (`?`).
+  - Added root CLI flags: `-e, --endpoint <addr>`, `--token <secret>`, `--node-id <id>`, `-v, --version`, and `-h, --help`.
+  - Added non-interactive terminal detection (graceful notice when `stdin` or `stdout` is not a TTY).
+  - Added unit test suite in `cmd/flux/tui/app_test.go` verifying standalone/cluster initialization, view switching, dynamic connect/disconnect, command parsing, and title stack operations.
+
+---
+
 ## [0.20.0] - 2026-10-02
 
 ### Added
