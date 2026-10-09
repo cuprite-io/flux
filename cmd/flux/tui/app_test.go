@@ -108,7 +108,7 @@ func TestTUI_DynamicConnectAndDisconnect(t *testing.T) {
 		}
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
-		_, _ = w.Write([]byte(`{"service":"flux-admin","version":"0.21.0","cluster_nodes":3,"leader_id":"test-leader"}`))
+		_, _ = w.Write([]byte(`{"service":"flux-admin","version":"0.22.0","cluster_nodes":3,"leader_id":"test-leader"}`))
 	}))
 	defer ts.Close()
 
@@ -298,7 +298,7 @@ func TestTUI_WindowTitle(t *testing.T) {
 		w.Header().Set("X-Flux-Admin", "true")
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
-		_, _ = w.Write([]byte(`{"service":"flux-admin","version":"0.21.0"}`))
+		_, _ = w.Write([]byte(`{"service":"flux-admin","version":"0.22.0"}`))
 	}))
 	defer ts.Close()
 

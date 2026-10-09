@@ -13,8 +13,10 @@ import (
 	"sync"
 	"time"
 
+	"github.com/cuprite-io/flux/internal/admin"
 	"github.com/cuprite-io/flux/internal/cache"
 	"github.com/cuprite-io/flux/internal/catalog"
+	"github.com/cuprite-io/flux/internal/cluster"
 	"github.com/cuprite-io/flux/internal/compiler"
 	"github.com/cuprite-io/flux/internal/engine"
 	"github.com/cuprite-io/flux/internal/history"
@@ -55,6 +57,13 @@ type Engine struct {
 	sparkObservers   map[uint64]func(payload any, tags []string, res *types.SparkResult)
 	autopilotMu      sync.RWMutex
 	autopilotHandles []*AutopilotHandle
+	elector          cluster.LeaderElector
+	adminEnabled     bool
+	adminConfig      admin.Config
+	adminServer      *admin.Server
+	alertObserversMu sync.RWMutex
+	nextAlertObsID   uint64
+	alertObservers   map[uint64]func(evt admin.AlertEvent)
 }
 
 // New creates and initializes a new Flux Engine.
@@ -66,6 +75,7 @@ func New(opts ...Option) (*Engine, error) {
 		profilerConfig: profiler.DefaultConfig(),
 		historyConfig:  history.DefaultConfig(),
 		sparkObservers: make(map[uint64]func(payload any, tags []string, res *types.SparkResult)),
+		alertObservers: make(map[uint64]func(evt admin.AlertEvent)),
 	}
 
 	for _, opt := range opts {
@@ -100,15 +110,15 @@ func New(opts ...Option) (*Engine, error) {
 		execOpts = append(execOpts, engine.WithExecutorTracer(e.tracer))
 	}
 	execOpts = append(execOpts, engine.WithAlertHook(func(ctx context.Context, circuitID, nodeName, sinkName, condition string, payload any) {
+		var m map[string]any
+		if asMap, ok := payload.(map[string]any); ok {
+			m = asMap
+		} else if b, ok := payload.([]byte); ok {
+			_ = json.Unmarshal(b, &m)
+		} else if s, ok := payload.(string); ok {
+			_ = json.Unmarshal([]byte(s), &m)
+		}
 		if e.history != nil {
-			var m map[string]any
-			if asMap, ok := payload.(map[string]any); ok {
-				m = asMap
-			} else if b, ok := payload.([]byte); ok {
-				_ = json.Unmarshal(b, &m)
-			} else if s, ok := payload.(string); ok {
-				_ = json.Unmarshal([]byte(s), &m)
-			}
 			_ = e.history.Record(ctx, history.AlertRecord{
 				CircuitID: circuitID,
 				NodeName:  nodeName,
@@ -117,6 +127,15 @@ func New(opts ...Option) (*Engine, error) {
 				Payload:   m,
 			})
 		}
+		e.notifyAlertObservers(admin.AlertEvent{
+			ID:        fmt.Sprintf("alert-%d", time.Now().UnixNano()),
+			CircuitID: circuitID,
+			NodeName:  nodeName,
+			SinkName:  sinkName,
+			Condition: condition,
+			Payload:   m,
+			Timestamp: time.Now().UTC(),
+		})
 	}))
 
 	e.executor = engine.NewExecutor(e.compiler, e.pool, func(sinkName string, payload any) error {
@@ -137,6 +156,17 @@ func New(opts ...Option) (*Engine, error) {
 			return nil, fmt.Errorf("flux: failed to initialize profiler: %w", err)
 		}
 		e.profiler = prof
+	}
+
+	if e.adminEnabled {
+		srv, err := admin.NewServer(e, e.adminConfig)
+		if err != nil {
+			return nil, fmt.Errorf("flux: failed to initialize admin server: %w", err)
+		}
+		if err := srv.Start(); err != nil {
+			return nil, fmt.Errorf("flux: failed to start admin server: %w", err)
+		}
+		e.adminServer = srv
 	}
 
 	return e, nil
@@ -240,6 +270,10 @@ func (e *Engine) SinkDescriptor(name string) (sink.Descriptor, bool) {
 // Close gracefully stops the Engine and drains all background queues.
 // If the cache backend was externally supplied via WithCache, it is left open.
 func (e *Engine) Close() error {
+	if e.adminServer != nil {
+		_ = e.adminServer.Stop(context.Background())
+	}
+
 	e.autopilotMu.Lock()
 	handles := slices.Clone(e.autopilotHandles)
 	e.autopilotHandles = nil
@@ -761,3 +795,250 @@ func cloneMap(m map[string]any) map[string]any {
 	}
 	return res
 }
+
+// Version returns the current semantic version of the engine.
+func (e *Engine) Version() string {
+	return Version
+}
+
+// NodeID returns the identifier of the local node.
+func (e *Engine) NodeID() string {
+	if e.elector != nil {
+		return e.elector.NodeID()
+	}
+	return "standalone"
+}
+
+// LeaderID returns the identifier of the current cluster leader.
+func (e *Engine) LeaderID() string {
+	if e.elector != nil {
+		return e.elector.LeaderID()
+	}
+	return "standalone"
+}
+
+// IsLeader returns true if the local node is currently the elected cluster leader.
+func (e *Engine) IsLeader() bool {
+	if e.elector != nil {
+		return e.elector.IsLeader()
+	}
+	return true
+}
+
+// ActiveNodes returns the list of active cluster node IDs.
+func (e *Engine) ActiveNodes() []string {
+	if e.elector != nil {
+		return e.elector.ActiveNodes()
+	}
+	return []string{"standalone"}
+}
+
+// ListCircuits retrieves all registered Circuits directly from CacheBackend with zero shadow caching.
+func (e *Engine) ListCircuits(ctx context.Context) ([]*types.Circuit, error) {
+	if e.registry == nil {
+		return nil, nil
+	}
+	return e.registry.ListAll(ctx)
+}
+
+// GetCircuit retrieves a Circuit directly from CacheBackend by its ID.
+func (e *Engine) GetCircuit(ctx context.Context, id string) (*types.Circuit, error) {
+	if e.registry == nil {
+		return nil, errors.New("flux: circuit registry not initialized")
+	}
+	return e.registry.Get(ctx, id)
+}
+
+// AutopilotHandles returns a cloned slice of active Autopilot session handles.
+func (e *Engine) AutopilotHandles() []*AutopilotHandle {
+	e.autopilotMu.RLock()
+	defer e.autopilotMu.RUnlock()
+	return slices.Clone(e.autopilotHandles)
+}
+
+// GetAutopilotSessions returns information on all active and historical Autopilot sessions.
+func (e *Engine) GetAutopilotSessions(ctx context.Context) []admin.AutopilotSessionInfo {
+	e.autopilotMu.RLock()
+	defer e.autopilotMu.RUnlock()
+
+	sessions := make([]admin.AutopilotSessionInfo, 0, len(e.autopilotHandles))
+	for i, h := range e.autopilotHandles {
+		status := h.Status()
+		var stagingInfo *admin.AutopilotStagingInfo
+		if sr := h.StagingResult(); sr != nil {
+			stagingInfo = &admin.AutopilotStagingInfo{
+				TotalEvents:     sr.TotalEvents,
+				FiringEvents:    sr.FiringEvents,
+				ErrorEvents:     sr.ErrorEvents,
+				ObservedRate:    sr.ObservedRate,
+				Status:          string(sr.Status),
+				RejectionReason: sr.RejectionReason,
+				Promoted:        sr.Promoted,
+			}
+		}
+		var lastErrStr string
+		if h.lastErr != nil {
+			lastErrStr = h.lastErr.Error()
+		}
+		sessions = append(sessions, admin.AutopilotSessionInfo{
+			SessionID:      fmt.Sprintf("autopilot-%d", i+1),
+			Prompt:         h.prompt,
+			Status:         string(status),
+			Tags:           slices.Clone(h.tags),
+			ActiveCircuits: h.ActiveCircuits(),
+			StagingResult:  stagingInfo,
+			LastError:      lastErrStr,
+		})
+	}
+	return sessions
+}
+
+// DryRunEval executes an ad-hoc or existing circuit in dry-run mode with sink side effects suppressed.
+func (e *Engine) DryRunEval(ctx context.Context, req admin.EvalRequest) (*admin.EvalResponse, error) {
+	start := time.Now()
+
+	var targetCircuit *types.Circuit
+	if req.Circuit != nil {
+		targetCircuit = req.Circuit
+	} else if req.CircuitID != "" {
+		c, err := e.registry.Get(ctx, req.CircuitID)
+		if err != nil {
+			return nil, fmt.Errorf("flux: circuit %q not found: %w", req.CircuitID, err)
+		}
+		targetCircuit = c
+	} else if len(req.Tags) > 0 {
+		circuits := e.registry.GetMatching(ctx, req.Tags...)
+		if len(circuits) == 0 {
+			return &admin.EvalResponse{
+				Passed:        true,
+				DurationMicro: time.Since(start).Microseconds(),
+			}, nil
+		}
+
+		var executed []string
+		var errs []string
+		returned := make(map[string]any)
+		passed := true
+		shadowFirings := 0
+
+		normPayload := normalizeInput(req.Payload)
+		for _, c := range circuits {
+			executed = append(executed, c.ID)
+			sctx := state.AcquireContext(ctx, normPayload)
+			sctx.SetShadowMode(true) // Suppress external sink dispatch
+			for k, v := range req.Context {
+				sctx.Set(k, v)
+			}
+			res, err := e.executor.ExecuteCircuit(ctx, c, sctx)
+			state.ReleaseContext(sctx)
+			if err != nil {
+				passed = false
+				errs = append(errs, err.Error())
+				continue
+			}
+			if res != nil {
+				if !res.Passed || sctx.IsPruned(1<<0) {
+					passed = false
+				}
+				for k, v := range res.ReturnedData {
+					returned[k] = v
+				}
+				shadowFirings += int(res.ShadowFirings)
+			}
+		}
+
+		return &admin.EvalResponse{
+			Passed:           passed,
+			ExecutedCircuits: executed,
+			ReturnedData:     returned,
+			ShadowFirings:    shadowFirings,
+			DurationMicro:    time.Since(start).Microseconds(),
+			Errors:           errs,
+		}, nil
+	} else {
+		return nil, errors.New("flux: eval requires circuit definition, circuit_id, or tags")
+	}
+
+	normPayload := normalizeInput(req.Payload)
+	sctx := state.AcquireContext(ctx, normPayload)
+	sctx.SetShadowMode(true) // Suppress external sink dispatch
+	defer state.ReleaseContext(sctx)
+	for k, v := range req.Context {
+		sctx.Set(k, v)
+	}
+
+	res, err := e.executor.ExecuteCircuit(ctx, targetCircuit, sctx)
+	dur := time.Since(start).Microseconds()
+	if err != nil {
+		return &admin.EvalResponse{
+			Passed:           false,
+			ExecutedCircuits: []string{targetCircuit.ID},
+			DurationMicro:    dur,
+			Errors:           []string{err.Error()},
+		}, nil
+	}
+
+	retData := make(map[string]any)
+	shadowFirings := 0
+	passed := true
+	var errStrs []string
+	if res != nil {
+		passed = res.Passed && !sctx.IsPruned(1<<0)
+		retData = res.ReturnedData
+		shadowFirings = int(res.ShadowFirings)
+		for _, err := range res.Errors {
+			if err != nil {
+				errStrs = append(errStrs, err.Error())
+			}
+		}
+	}
+
+	return &admin.EvalResponse{
+		Passed:           passed,
+		ExecutedCircuits: []string{targetCircuit.ID},
+		ReturnedData:     retData,
+		ShadowFirings:    shadowFirings,
+		DurationMicro:    dur,
+		Errors:           errStrs,
+	}, nil
+}
+
+// RegisterAlertObserver registers a callback invoked on real-time alert events.
+func (e *Engine) RegisterAlertObserver(obs func(evt admin.AlertEvent)) func() {
+	e.alertObserversMu.Lock()
+	defer e.alertObserversMu.Unlock()
+	if e.alertObservers == nil {
+		e.alertObservers = make(map[uint64]func(evt admin.AlertEvent))
+	}
+	e.nextAlertObsID++
+	id := e.nextAlertObsID
+	e.alertObservers[id] = obs
+	return func() {
+		e.alertObserversMu.Lock()
+		defer e.alertObserversMu.Unlock()
+		delete(e.alertObservers, id)
+	}
+}
+
+func (e *Engine) notifyAlertObservers(evt admin.AlertEvent) {
+	e.alertObserversMu.RLock()
+	if len(e.alertObservers) == 0 {
+		e.alertObserversMu.RUnlock()
+		return
+	}
+	observers := make([]func(evt admin.AlertEvent), 0, len(e.alertObservers))
+	for _, obs := range e.alertObservers {
+		observers = append(observers, obs)
+	}
+	e.alertObserversMu.RUnlock()
+
+	for _, obs := range observers {
+		obs(evt)
+	}
+}
+
+// AdminServer returns the running Admin control plane server, if enabled.
+func (e *Engine) AdminServer() *admin.Server {
+	return e.adminServer
+}
+

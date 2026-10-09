@@ -3,7 +3,9 @@ package flux
 import (
 	"time"
 
+	"github.com/cuprite-io/flux/internal/admin"
 	"github.com/cuprite-io/flux/internal/cache"
+	"github.com/cuprite-io/flux/internal/cluster"
 	"github.com/cuprite-io/flux/internal/history"
 	"github.com/cuprite-io/flux/internal/profiler"
 	"github.com/cuprite-io/flux/internal/schematap"
@@ -178,5 +180,37 @@ func WithHistoryAsync(async bool) Option {
 		e.historyConfig.Async = async
 	}
 }
+
+// WithElector sets the cluster leader elector for multi-node topology and distributed coordination.
+func WithElector(elector cluster.LeaderElector) Option {
+	return func(e *Engine) {
+		e.elector = elector
+	}
+}
+
+// AdminOption configures the Flux Engine Admin control plane HTTP server.
+type AdminOption func(*admin.Config)
+
+// WithAdmin enables the embedded Admin HTTP control plane API on the specified listen address.
+func WithAdmin(addr string, opts ...AdminOption) Option {
+	return func(e *Engine) {
+		e.adminConfig = admin.DefaultConfig()
+		if addr != "" {
+			e.adminConfig.Addr = addr
+		}
+		for _, opt := range opts {
+			opt(&e.adminConfig)
+		}
+		e.adminEnabled = true
+	}
+}
+
+// WithAdminToken configures Bearer token authentication on the Admin control plane.
+func WithAdminToken(token string) AdminOption {
+	return func(c *admin.Config) {
+		c.Token = token
+	}
+}
+
 
 

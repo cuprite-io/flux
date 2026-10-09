@@ -348,3 +348,29 @@ func (r *Registry) Delete(ctx context.Context, id string) error {
 
 	return nil
 }
+
+// ListAll retrieves all registered Circuits directly from CacheBackend with zero shadow caching.
+func (r *Registry) ListAll(ctx context.Context) ([]*types.Circuit, error) {
+	rawMap, err := r.backend().MapGetAll(ctx, circuitsMapKey)
+	if err != nil {
+		return nil, fmt.Errorf("flux registry: failed to list circuits: %w", err)
+	}
+	if len(rawMap) == 0 {
+		return nil, nil
+	}
+
+	circuits := make([]*types.Circuit, 0, len(rawMap))
+	for _, raw := range rawMap {
+		var c types.Circuit
+		if errJSON := json.Unmarshal([]byte(raw), &c); errJSON == nil {
+			circuits = append(circuits, &c)
+		}
+	}
+
+	sort.Slice(circuits, func(i, j int) bool {
+		return circuits[i].ID < circuits[j].ID
+	})
+
+	return circuits, nil
+}
+

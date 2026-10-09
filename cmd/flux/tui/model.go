@@ -15,6 +15,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/cuprite-io/flux"
+	"github.com/cuprite-io/flux/cmd/flux/tui/client"
 )
 
 // TickMsg triggers regular background UI refresh.
@@ -22,6 +23,7 @@ type TickMsg time.Time
 
 // Model is the top-level Bubble Tea model for the Flux shell.
 type Model struct {
+	client       client.Client
 	keys         KeyMap
 	currentView  ViewID
 	previousView ViewID
@@ -76,7 +78,19 @@ func NewModel(cfg Config) Model {
 		}
 	}
 
+	var cli client.Client
+	if isCluster {
+		c, err := client.NewHTTPClient(cfg.Endpoint, cfg.Token)
+		if err == nil {
+			cli = c
+		}
+	}
+	if cli == nil {
+		cli, _ = client.NewLocalClient()
+	}
+
 	return Model{
+		client:       cli,
 		keys:         DefaultKeyMap(),
 		currentView:  ViewCircuits,
 		previousView: ViewCircuits,
@@ -90,6 +104,11 @@ func NewModel(cfg Config) Model {
 		commandInput: ti,
 		statusMsg:    "Flux Shell active. Press '?' for help, ':' for commands.",
 	}
+}
+
+// Client returns the active communication client bridge (HTTPClient or LocalClient).
+func (m Model) Client() client.Client {
+	return m.client
 }
 
 // SetDimensions updates the window size.
@@ -218,6 +237,12 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 						m.nodeCount = probeRes.ClusterNodes
 					}
 					m.isCluster = true
+					if cli, err := client.NewHTTPClient(probeRes.URL, token); err == nil {
+						if m.client != nil {
+							_ = m.client.Close()
+						}
+						m.client = cli
+					}
 					m.SetStatus(fmt.Sprintf("Connected to %s (Cluster Mode)", probeRes.URL), false)
 					return m, m.WindowTitleCmd()
 				}
@@ -234,6 +259,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				if trimmed == "disconnect" {
 					m.isCluster = false
 					m.endpoint = "standalone (local memory)"
+					if m.client != nil {
+						_ = m.client.Close()
+					}
+					m.client, _ = client.NewLocalClient()
 					m.SetView(ViewCircuits)
 					m.SetStatus("Disconnected. Switched to Standalone Mode", false)
 					return m, m.WindowTitleCmd()

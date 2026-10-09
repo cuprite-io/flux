@@ -7,6 +7,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.22.0] - 2026-10-09
+
+### Added
+
+- **Engine Control Plane (`flux.WithAdmin`) & TUI Client Bridge** (`internal/admin`, `cmd/flux/tui/client`, `flux.go`, `options.go`):
+  - Added embedded zero-dependency HTTP control plane server to Flux Engine via `flux.WithAdmin(addr, opts...)` and `flux.WithAdminToken(token)`.
+  - Implemented REST and SSE endpoints with strict statelessness (direct CacheBackend queries with zero duplicate in-memory state):
+    - `GET /api/v1/status`: Engine health, version, node count, leader ID, and cluster topology.
+    - `GET /api/v1/circuits`: Lists deployed circuits and single circuit definitions directly from `CacheBackend`.
+    - `GET /api/v1/autopilot`: Autonomous session phases, reflection logs, and shadow staging metrics.
+    - `GET /api/v1/alerts/history`: Historical alerts with circuit and limit filters.
+    - `GET /api/v1/alerts/stream`: Real-time Server-Sent Events (SSE) alert stream with automatic keep-alive pings.
+    - `POST /api/v1/feedback`: Records operator classifications (`valid`, `false_positive`, `noisy`, `muted`) into `CacheBackend`.
+    - `POST /api/v1/eval`: Executes dry-run payloads through engine VM with external sink side effects suppressed.
+  - Added `X-Flux-Admin`, `X-Flux-Engine`, and `X-Flux-Version` headers on all responses for strict identity verification.
+  - Implemented client bridge (`cmd/flux/tui/client`):
+    - `Client` interface unifying communication for all TUI views.
+    - `HTTPClient`: Lightweight remote client connecting over HTTP/SSE with zero database driver dependencies.
+    - `LocalClient`: In-memory standalone client powering offline local DAG editing and dry-run evaluation.
+  - Added comprehensive test suites in `internal/admin/admin_test.go` and `cmd/flux/tui/client/client_test.go`.
+
+---
+
 ## [0.21.0] - 2026-10-03
 
 ### Added
