@@ -211,6 +211,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.circuitsView, cmd = m.circuitsView.Update(msg)
 		return m, cmd
 
+	case circuits.DryRunHandoffMsg:
+		m.SetView(ViewEval)
+		m.SetStatus(fmt.Sprintf("Transferred circuit %q to Dry-Run Playground.", msg.CircuitID), false)
+		return m, nil
+
 	case TickMsg:
 		m.currentTime = time.Time(msg)
 		if !m.statusExpiry.IsZero() && time.Now().After(m.statusExpiry) {
@@ -321,6 +326,14 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 		// Active View-Specific Key Handlers
 		if m.currentView == ViewCircuits {
+			if m.circuitsView.IsModalActive() {
+				var cmd tea.Cmd
+				m.circuitsView, cmd = m.circuitsView.Update(msg)
+				if status := m.circuitsView.StatusMsg(); status != "" {
+					m.SetStatus(status, false)
+				}
+				return m, cmd
+			}
 			if m.circuitsView.IsFiltering() {
 				var cmd tea.Cmd
 				m.circuitsView, cmd = m.circuitsView.Update(msg)
@@ -334,11 +347,18 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 				var cmd tea.Cmd
 				m.circuitsView, cmd = m.circuitsView.Update(msg)
+				if status := m.circuitsView.StatusMsg(); status != "" {
+					m.SetStatus(status, false)
+				}
 				return m, cmd
 			}
-			if msg.String() == "/" {
+			switch msg.String() {
+			case "l", "r", "e", "d", "/":
 				var cmd tea.Cmd
 				m.circuitsView, cmd = m.circuitsView.Update(msg)
+				if status := m.circuitsView.StatusMsg(); status != "" {
+					m.SetStatus(status, false)
+				}
 				return m, cmd
 			}
 			if key.Matches(msg, m.keys.Enter) {
@@ -349,12 +369,6 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if key.Matches(msg, m.keys.Up) || key.Matches(msg, m.keys.Down) {
 				var cmd tea.Cmd
 				m.circuitsView, cmd = m.circuitsView.Update(msg)
-				return m, cmd
-			}
-			if key.Matches(msg, m.keys.Refresh) {
-				var cmd tea.Cmd
-				m.circuitsView, cmd = m.circuitsView.Update(msg)
-				m.SetStatus("Circuits refreshed.", false)
 				return m, cmd
 			}
 			if key.Matches(msg, m.keys.Escape) {
@@ -558,6 +572,8 @@ func (m Model) renderFooter() string {
 		} else {
 			left = StyleStatusMsg.Render("✓ " + m.statusMsg)
 		}
+	} else if m.currentView == ViewCircuits && m.circuitsView.IsModalActive() {
+		left = StyleStatusMsg.Render("Modal active. Press Esc/q to dismiss or follow on-screen prompt.")
 	} else if m.currentView == ViewCircuits && m.circuitsView.IsFiltering() {
 		left = StyleStatusMsg.Render("Filter mode active. Type search query, Enter to accept, Esc to cancel.")
 	} else if m.currentView == ViewCircuits && m.circuitsView.IsDetail() {
@@ -588,7 +604,7 @@ func (m Model) renderContent(height int) string {
 
 	switch m.currentView {
 	case ViewCircuits:
-		if m.circuitsView.IsDetail() {
+		if m.circuitsView.IsDetail() || m.circuitsView.IsModalActive() {
 			return StyleViewport.Render(m.circuitsView.View())
 		}
 		return panelStyle.Render(m.circuitsView.View())

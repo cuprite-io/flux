@@ -849,6 +849,14 @@ func (e *Engine) GetCircuit(ctx context.Context, id string) (*types.Circuit, err
 	return e.registry.Get(ctx, id)
 }
 
+// PutCircuit stores or hot-swaps a Circuit definition in CacheBackend.
+func (e *Engine) PutCircuit(ctx context.Context, circuit *types.Circuit) error {
+	if e.registry == nil {
+		return errors.New("flux: circuit registry not initialized")
+	}
+	return e.registry.Put(ctx, circuit)
+}
+
 // AutopilotHandles returns a cloned slice of active Autopilot session handles.
 func (e *Engine) AutopilotHandles() []*AutopilotHandle {
 	e.autopilotMu.RLock()

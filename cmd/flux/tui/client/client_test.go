@@ -30,7 +30,7 @@ func newMockEngine() *mockEngine {
 	}
 }
 
-func (m *mockEngine) Version() string       { return "0.23.0" }
+func (m *mockEngine) Version() string       { return "0.24.0" }
 func (m *mockEngine) NodeID() string        { return "node-test-1" }
 func (m *mockEngine) LeaderID() string      { return "node-test-1" }
 func (m *mockEngine) IsLeader() bool        { return true }
@@ -53,6 +53,16 @@ func (m *mockEngine) GetCircuit(ctx context.Context, id string) (*types.Circuit,
 		return c, nil
 	}
 	return nil, fmt.Errorf("not found")
+}
+
+func (m *mockEngine) PutCircuit(ctx context.Context, circuit *types.Circuit) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if circuit == nil || circuit.ID == "" {
+		return fmt.Errorf("invalid circuit")
+	}
+	m.circuits[circuit.ID] = circuit
+	return nil
 }
 
 func (m *mockEngine) GetAlertHistory(ctx context.Context, circuitID string, limit int) ([]history.AlertRecord, error) {
@@ -149,7 +159,7 @@ func TestHTTPClient_FullLifecycle(t *testing.T) {
 	status, err := c.GetStatus(context.Background())
 	require.NoError(t, err)
 	assert.Equal(t, "flux-admin", status.Service)
-	assert.Equal(t, "0.23.0", status.Version)
+	assert.Equal(t, "0.24.0", status.Version)
 	assert.Equal(t, 2, status.ClusterNodes)
 	assert.True(t, status.IsLeader)
 
@@ -164,6 +174,14 @@ func TestHTTPClient_FullLifecycle(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, "fraud_circuit", single.ID)
 	assert.Equal(t, "amount > 500", single.RootCondition)
+
+	// PutCircuit (hot-swap)
+	newCirc := types.NewCircuit("hot_swap_http").WithTags("http_test")
+	newCirc.Root = types.NewNode("root").WithCondition("payload.val > 10")
+	putRes, err := c.PutCircuit(context.Background(), newCirc)
+	require.NoError(t, err)
+	assert.Equal(t, "hot_swap_http", putRes.ID)
+	assert.Equal(t, "payload.val > 10", putRes.RootCondition)
 
 	// GetAutopilot
 	autopilotSessions, err := c.GetAutopilot(context.Background())
@@ -257,6 +275,13 @@ func TestLocalClient_StandaloneMode(t *testing.T) {
 	single, err := lc.GetCircuit(ctx, "local_eval_circ")
 	require.NoError(t, err)
 	assert.Equal(t, "local_eval_circ", single.ID)
+
+	// 4b. PutCircuit (local hot-swap)
+	c2 := types.NewCircuit("local_hot_swap").WithTags("stream:swap")
+	c2.Root = types.NewNode("swap_root").WithCondition("payload.val > 50")
+	putRes, err := lc.PutCircuit(ctx, c2)
+	require.NoError(t, err)
+	assert.Equal(t, "local_hot_swap", putRes.ID)
 
 	// 5. DryRunEval
 	evalRes, err := lc.DryRunEval(ctx, client.EvalRequest{

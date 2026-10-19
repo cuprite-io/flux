@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -109,7 +111,7 @@ func TestTUI_DynamicConnectAndDisconnect(t *testing.T) {
 		}
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
-		_, _ = w.Write([]byte(`{"service":"flux-admin","version":"0.23.0","cluster_nodes":3,"leader_id":"test-leader"}`))
+		_, _ = w.Write([]byte(`{"service":"flux-admin","version":"0.24.0","cluster_nodes":3,"leader_id":"test-leader"}`))
 	}))
 	defer ts.Close()
 
@@ -299,7 +301,7 @@ func TestTUI_WindowTitle(t *testing.T) {
 		w.Header().Set("X-Flux-Admin", "true")
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
-		_, _ = w.Write([]byte(`{"service":"flux-admin","version":"0.23.0"}`))
+		_, _ = w.Write([]byte(`{"service":"flux-admin","version":"0.24.0"}`))
 	}))
 	defer ts.Close()
 
@@ -355,7 +357,7 @@ func TestTUI_CircuitsView_Interaction(t *testing.T) {
 
 		if r.URL.Path == "/api/v1/status" {
 			w.WriteHeader(http.StatusOK)
-			_, _ = w.Write([]byte(`{"service":"flux-admin","version":"0.23.0","cluster_nodes":2,"leader_id":"node-1"}`))
+			_, _ = w.Write([]byte(`{"service":"flux-admin","version":"0.24.0","cluster_nodes":2,"leader_id":"node-1"}`))
 			return
 		}
 
@@ -483,6 +485,189 @@ func TestTUI_CircuitsView_Interaction(t *testing.T) {
 	model = newM.(tui.Model)
 	assert.False(t, model.CircuitsView().IsDetail())
 	assert.Contains(t, model.View(), "Deployed Decision Pipelines")
+}
+
+func TestTUI_CircuitsView_Actions(t *testing.T) {
+	// 1. Mock Flux Admin server with circuits endpoints supporting GET, POST
+	var storedCircuits = []string{`{
+		"id": "fraud_evaluator",
+		"tags": ["payments", "fraud"],
+		"root_condition": "payload.amount > 1000",
+		"node_count": 2,
+		"status": "LIVE",
+		"revision": 1,
+		"definition": {
+			"id": "fraud_evaluator",
+			"tags": ["payments", "fraud"],
+			"root": {
+				"name": "check_amount",
+				"condition": "payload.amount > 1000",
+				"steps": [{"type": 0, "script": "let x = payload.amount"}],
+				"children": [
+					{
+						"name": "dispatch_alert",
+						"steps": [{"type": 1, "sink": "fraud_sink", "sink_type": "kafka"}]
+					}
+				]
+			}
+		}
+	}`}
+
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("X-Flux-Admin", "true")
+		w.Header().Set("Content-Type", "application/json")
+
+		if r.URL.Path == "/api/v1/status" {
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(`{"service":"flux-admin","version":"0.24.0","cluster_nodes":2,"leader_id":"node-1"}`))
+			return
+		}
+
+		if r.URL.Path == "/api/v1/circuits" {
+			if r.Method == http.MethodPost || r.Method == http.MethodPut {
+				w.WriteHeader(http.StatusOK)
+				_, _ = w.Write([]byte(`{
+					"id": "hotswapped_circuit",
+					"tags": ["hotswap"],
+					"root_condition": "payload.active == true",
+					"node_count": 1,
+					"status": "LIVE",
+					"revision": 2
+				}`))
+				return
+			}
+
+			// GET by id
+			id := r.URL.Query().Get("id")
+			if id == "fraud_evaluator" {
+				w.WriteHeader(http.StatusOK)
+				_, _ = w.Write([]byte(storedCircuits[0]))
+				return
+			}
+
+			// List
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(`[` + storedCircuits[0] + `]`))
+			return
+		}
+
+		w.WriteHeader(http.StatusNotFound)
+	}))
+	defer ts.Close()
+
+	model := tui.NewModel(tui.Config{Endpoint: ts.URL})
+	model.SetDimensions(120, 35)
+
+	// Fetch circuits directly
+	loadedCmd := circuits.FetchCircuitsCmd(model.Client())
+	msg := loadedCmd()
+	newM, _ := model.Update(msg)
+	model = newM.(tui.Model)
+	assert.Contains(t, model.View(), "fraud_evaluator")
+
+	// 2. Test 'l' (Lint): Opens linter modal
+	newM, lintCmd := model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'l'}})
+	model = newM.(tui.Model)
+	assert.True(t, model.CircuitsView().IsModalActive())
+	if lintCmd != nil {
+		detailMsg := lintCmd()
+		newM, _ = model.Update(detailMsg)
+		model = newM.(tui.Model)
+	}
+
+	viewWithLint := model.View()
+	assert.Contains(t, viewWithLint, "Circuit Linter Static Analysis")
+	assert.Contains(t, viewWithLint, "fraud_evaluator")
+
+	// Verify typing 'q' closes modal and does NOT exit the TUI app
+	newM, _ = model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'q'}})
+	model = newM.(tui.Model)
+	assert.False(t, model.CircuitsView().IsModalActive())
+	assert.Equal(t, tui.ViewCircuits, model.CurrentView())
+
+	// 3. Test 'r' (Reload / Hot-Swap): Opens prompt
+	newM, _ = model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'r'}})
+	model = newM.(tui.Model)
+	assert.True(t, model.CircuitsView().IsModalActive())
+	assert.Contains(t, model.View(), "Hot-Swap Circuit Pipeline")
+
+	// Press Esc to dismiss
+	newM, _ = model.Update(tea.KeyMsg{Type: tea.KeyEscape})
+	model = newM.(tui.Model)
+	assert.False(t, model.CircuitsView().IsModalActive())
+
+	// Perform actual Hot-Swap with temp file
+	tmpDir := t.TempDir()
+	validJSON := filepath.Join(tmpDir, "hotswap.json")
+	_ = os.WriteFile(validJSON, []byte(`{
+		"id": "hotswapped_circuit",
+		"tags": ["hotswap"],
+		"root": {
+			"name": "r1",
+			"condition": "payload.active == true",
+			"steps": []
+		}
+	}`), 0644)
+
+	newM, _ = model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'r'}})
+	model = newM.(tui.Model)
+	for _, r := range validJSON {
+		newM, _ = model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{r}})
+		model = newM.(tui.Model)
+	}
+	newM, putCmd := model.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	model = newM.(tui.Model)
+	assert.False(t, model.CircuitsView().IsModalActive())
+	assert.Contains(t, model.View(), "Hot-swapped hotswapped_circuit successfully")
+	require.NotNil(t, putCmd)
+
+	// 4. Test 'e' (Export): Dumps definition to file
+	// First open detail mode or fetch detail to ensure definition is loaded
+	newM, dCmd := model.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	model = newM.(tui.Model)
+	if dCmd != nil {
+		newM, _ = model.Update(dCmd())
+		model = newM.(tui.Model)
+	}
+	assert.True(t, model.CircuitsView().IsDetail())
+
+	// Press 'e' in detail mode
+	newM, _ = model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'e'}})
+	model = newM.(tui.Model)
+	assert.True(t, model.CircuitsView().IsModalActive())
+	assert.Contains(t, model.View(), "Export Circuit Definition")
+
+	exportPath := filepath.Join(tmpDir, "exported.json")
+	for range 30 {
+		newM, _ = model.Update(tea.KeyMsg{Type: tea.KeyBackspace})
+		model = newM.(tui.Model)
+	}
+	for _, r := range exportPath {
+		newM, _ = model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{r}})
+		model = newM.(tui.Model)
+	}
+	newM, _ = model.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	model = newM.(tui.Model)
+	assert.False(t, model.CircuitsView().IsModalActive())
+	assert.Contains(t, model.View(), "Exported fraud_evaluator")
+
+	exportedData, err := os.ReadFile(exportPath)
+	require.NoError(t, err)
+	assert.Contains(t, string(exportedData), "fraud_evaluator")
+
+	// 5. Test 'd' (Dry-Run): Dispatches DryRunHandoffMsg and transitions to ViewEval
+	newM, dryCmd := model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'d'}})
+	model = newM.(tui.Model)
+	require.NotNil(t, dryCmd)
+
+	handoffMsg := dryCmd()
+	require.IsType(t, circuits.DryRunHandoffMsg{}, handoffMsg)
+
+	// Top-level model handles handoff
+	newM, _ = model.Update(handoffMsg)
+	model = newM.(tui.Model)
+	assert.Equal(t, tui.ViewEval, model.CurrentView())
+	assert.Contains(t, model.View(), "Transferred circuit \"fraud_evaluator\" to Dry-Run Playground")
 }
 
 

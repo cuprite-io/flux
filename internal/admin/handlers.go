@@ -77,8 +77,34 @@ func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
 	s.writeJSON(w, http.StatusOK, resp)
 }
 
-// handleCircuits handles GET /api/v1/circuits and GET /api/v1/circuits?id=<circuit_id>.
+// handleCircuits handles GET, POST, and PUT on /api/v1/circuits.
 func (s *Server) handleCircuits(w http.ResponseWriter, r *http.Request) {
+	if r.Method == http.MethodPost || r.Method == http.MethodPut {
+		var circuit types.Circuit
+		if err := json.NewDecoder(r.Body).Decode(&circuit); err != nil {
+			s.writeJSONError(w, http.StatusBadRequest, fmt.Sprintf("invalid circuit payload: %v", err))
+			return
+		}
+		if strings.TrimSpace(circuit.ID) == "" {
+			s.writeJSONError(w, http.StatusBadRequest, "circuit 'id' is required")
+			return
+		}
+		if circuit.Root == nil {
+			s.writeJSONError(w, http.StatusBadRequest, "circuit 'root' node is required")
+			return
+		}
+
+		if err := s.engine.PutCircuit(r.Context(), &circuit); err != nil {
+			s.writeJSONError(w, http.StatusInternalServerError, fmt.Sprintf("failed to save circuit: %v", err))
+			return
+		}
+
+		summary := mapCircuitSummary(&circuit)
+		summary.Definition = &circuit
+		s.writeJSON(w, http.StatusOK, summary)
+		return
+	}
+
 	if r.Method != http.MethodGet {
 		s.writeJSONError(w, http.StatusMethodNotAllowed, "method not allowed")
 		return

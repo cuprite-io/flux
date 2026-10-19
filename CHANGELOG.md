@@ -7,6 +7,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.24.0] - 2026-10-19
+
+### Added
+
+- **In-Shell Circuit Linter & Hot-Swap Management** (`cmd/flux/tui/views/circuits`, `cmd/flux/tui/client`, `internal/admin`, `cmd/flux/tui/model.go`):
+  - **In-Shell Circuit Linter (`l`)**:
+    - Integrated `internal/linter` directly into the TUI circuits cockpit with `LinterModal` overlay dialog.
+    - Runs AST diagnostics detecting syntax issues, dead branches, and contradictory guard conditions with color-coded severity badges (`ERROR`, `WARN`, `INFO`), stats bar (nodes, steps, issue count), and scrollable viewport.
+    - Implemented modal input isolation: intercepts keystrokes (`↑`/`↓`/`k`/`j`/`PgUp`/`PgDown`, dismiss with `Esc`/`q`/`l`) without leaking commands to underlying views or triggering shell command mode.
+  - **Zero-Downtime Hot-Swap (`r`)**:
+    - Added `PutCircuit(ctx, circuit)` to `EngineContext`, `*flux.Engine`, `internal/admin`, and `cmd/flux/tui/client` (`HTTPClient` and `LocalClient`).
+    - Added atomic `POST`/`PUT` endpoint on `/api/v1/circuits` delegating directly to `CacheBackend`'s partitioned registry, preserving strict statelessness.
+    - Added interactive Hot-Swap file prompt (`r`) supporting JSON and YAML definitions from disk. If submitted blank, triggers an in-engine circuit reload.
+  - **Live Circuit Export (`e`)**:
+    - Added export prompt (`e`) dumping compiled live pipeline definitions to local disk formatted as JSON or YAML with directory auto-creation.
+  - **Dry-Run Playground Handoff (`d`)**:
+    - Pressing `d` emits `DryRunHandoffMsg`, transferring the selected circuit definition into the Dry-Run Playground (`ViewEval`) with immediate status notification.
+  - Added unit and end-to-end integration test suites across `cmd/flux/tui/views/circuits/view_test.go`, `cmd/flux/tui/app_test.go`, `cmd/flux/tui/client/client_test.go`, and `internal/admin/admin_test.go`.
+
+---
+
 ## [0.23.0] - 2026-10-19
 
 ### Added

@@ -127,6 +127,7 @@ type EngineContext interface {
 	ActiveNodes() []string
 	ListCircuits(ctx context.Context) ([]*types.Circuit, error)
 	GetCircuit(ctx context.Context, id string) (*types.Circuit, error)
+	PutCircuit(ctx context.Context, circuit *types.Circuit) error
 	GetAlertHistory(ctx context.Context, circuitID string, limit int) ([]history.AlertRecord, error)
 	RecordAlertFeedback(ctx context.Context, circuitID, alertID string, fb history.Feedback) error
 	GetAutopilotSessions(ctx context.Context) []AutopilotSessionInfo

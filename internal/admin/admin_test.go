@@ -2,6 +2,7 @@ package admin_test
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -35,7 +36,7 @@ type mockEngine struct {
 
 func newMockEngine() *mockEngine {
 	return &mockEngine{
-		version:     "0.23.0",
+		version:     "0.24.0",
 		nodeID:      "node-1",
 		leaderID:    "node-1",
 		isLeader:    true,
@@ -68,6 +69,16 @@ func (m *mockEngine) GetCircuit(ctx context.Context, id string) (*types.Circuit,
 		return c, nil
 	}
 	return nil, fmt.Errorf("circuit %s not found", id)
+}
+
+func (m *mockEngine) PutCircuit(ctx context.Context, circuit *types.Circuit) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if circuit == nil || circuit.ID == "" {
+		return fmt.Errorf("invalid circuit")
+	}
+	m.circuits[circuit.ID] = circuit
+	return nil
 }
 
 func (m *mockEngine) GetAlertHistory(ctx context.Context, circuitID string, limit int) ([]history.AlertRecord, error) {
@@ -144,14 +155,14 @@ func TestAdminServer_StatusAndHandshake(t *testing.T) {
 	assert.Equal(t, http.StatusOK, resp.StatusCode)
 	assert.Equal(t, "true", resp.Header.Get("X-Flux-Admin"))
 	assert.Equal(t, "true", resp.Header.Get("X-Flux-Engine"))
-	assert.Equal(t, "0.23.0", resp.Header.Get("X-Flux-Version"))
+	assert.Equal(t, "0.24.0", resp.Header.Get("X-Flux-Version"))
 
 	var status admin.StatusResponse
 	err = json.NewDecoder(resp.Body).Decode(&status)
 	require.NoError(t, err)
 
 	assert.Equal(t, "flux-admin", status.Service)
-	assert.Equal(t, "0.23.0", status.Version)
+	assert.Equal(t, "0.24.0", status.Version)
 	assert.Equal(t, "node-1", status.NodeID)
 	assert.Equal(t, "node-1", status.LeaderID)
 	assert.True(t, status.IsLeader)
@@ -232,6 +243,23 @@ func TestAdminServer_CircuitsEndpoints(t *testing.T) {
 	require.NoError(t, err)
 	defer resp3.Body.Close()
 	assert.Equal(t, http.StatusNotFound, resp3.StatusCode)
+
+	// Deploy / Hot-Swap new circuit via POST
+	newCirc := types.NewCircuit("hot_swap_circuit").WithTags("payments:v2")
+	newCirc.Root = types.NewNode("v2_root").WithCondition("payload.amount > 5000")
+	newCircBytes, err := json.Marshal(newCirc)
+	require.NoError(t, err)
+
+	postResp, err := http.Post(srv.URL()+"/api/v1/circuits", "application/json", bytes.NewReader(newCircBytes))
+	require.NoError(t, err)
+	defer postResp.Body.Close()
+	assert.Equal(t, http.StatusOK, postResp.StatusCode)
+
+	var postSummary admin.CircuitSummary
+	require.NoError(t, json.NewDecoder(postResp.Body).Decode(&postSummary))
+	assert.Equal(t, "hot_swap_circuit", postSummary.ID)
+	assert.Equal(t, "payload.amount > 5000", postSummary.RootCondition)
+	assert.Equal(t, "hot_swap_circuit", mockEng.circuits["hot_swap_circuit"].ID)
 }
 
 func TestAdminServer_FeedbackAndEval(t *testing.T) {

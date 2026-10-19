@@ -12,6 +12,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/cuprite-io/flux/cmd/flux/tui/client"
+	"github.com/cuprite-io/flux/types"
 )
 
 var (
@@ -98,6 +99,11 @@ type Model struct {
 	height  int
 	loading bool
 	err     error
+
+	// Lifecycle Actions & Modals
+	linterModal LinterModal
+	actionState ActionState
+	statusMsg   string
 }
 
 // New creates an initialized Circuits view model.
@@ -148,6 +154,8 @@ func New(c client.Client) Model {
 		filterInput:  ti,
 		focusedPanel: 0,
 		loading:      true,
+		linterModal:  NewLinterModal(),
+		actionState:  NewActionState(),
 	}
 }
 
@@ -218,6 +226,9 @@ func (m *Model) SetDimensions(w, h int) {
 	m.detailsVP.Width = rightW - 2
 	m.detailsVP.Height = panelH - 2
 
+	m.linterModal.SetDimensions(w, h)
+	m.actionState.width = w
+
 	if m.detailMode && m.selectedCircuit != nil {
 		m.updateDetailViewports()
 	}
@@ -231,6 +242,26 @@ func (m Model) IsFiltering() bool {
 // IsDetail returns true if detail split-screen inspector is open.
 func (m Model) IsDetail() bool {
 	return m.detailMode
+}
+
+// IsModalActive returns true if the linter modal or an action modal is open.
+func (m Model) IsModalActive() bool {
+	return m.linterModal.IsActive() || m.actionState.IsActive()
+}
+
+// LinterModal returns a pointer to the linter modal component.
+func (m *Model) LinterModal() *LinterModal {
+	return &m.linterModal
+}
+
+// ActionState returns a pointer to the action state component.
+func (m *Model) ActionState() *ActionState {
+	return &m.actionState
+}
+
+// StatusMsg returns the last action status message.
+func (m Model) StatusMsg() string {
+	return m.statusMsg
 }
 
 // SelectedCircuit returns the currently highlighted/selected circuit.
@@ -277,11 +308,73 @@ func (m Model) Update(msg tea.Msg) (Model, tea.Cmd) {
 				}
 			}
 			m.updateDetailViewports()
+			if m.linterModal.IsActive() && msg.Summary.Definition != nil {
+				m.linterModal.Open(msg.Summary.Definition, m.width, m.height)
+			}
 		}
 		return m, nil
 
 	case tea.KeyMsg:
-		// 1. Filter Input Mode
+		// 1. Linter Modal Active
+		if m.linterModal.IsActive() {
+			handled, cmd := m.linterModal.Update(msg)
+			if handled {
+				return m, cmd
+			}
+		}
+
+		// 2. Action Input Modal Active (Hot-Swap / Export)
+		if m.actionState.IsActive() {
+			switch msg.Type {
+			case tea.KeyEnter:
+				switch m.actionState.ModalType() {
+				case ActionModalHotSwap:
+					path := strings.TrimSpace(m.actionState.input.Value())
+					m.actionState.Close()
+					if path == "" {
+						m.loading = true
+						return m, FetchCircuitsCmd(m.client)
+					}
+					circ, err := LoadCircuitFromDisk(path)
+					if err != nil {
+						m.err = err
+						m.statusMsg = fmt.Sprintf("Hot-swap failed: %v", err)
+						return m, nil
+					}
+					m.loading = true
+					m.statusMsg = fmt.Sprintf("Hot-swapped %s successfully", circ.ID)
+					return m, func() tea.Msg {
+						_, _ = m.client.PutCircuit(context.Background(), circ)
+						circuits, err := m.client.GetCircuits(context.Background())
+						return CircuitsLoadedMsg{Circuits: circuits, Err: err}
+					}
+
+				case ActionModalExport:
+					path := strings.TrimSpace(m.actionState.input.Value())
+					target := m.actionState.target
+					m.actionState.Close()
+					if target != nil {
+						err := ExportCircuit(target, path, false)
+						if err != nil {
+							m.err = err
+							m.statusMsg = fmt.Sprintf("Export failed: %v", err)
+						} else {
+							m.statusMsg = fmt.Sprintf("Exported %s to %s", target.ID, path)
+						}
+					}
+					return m, nil
+				}
+			case tea.KeyEsc:
+				m.actionState.Close()
+				return m, nil
+			default:
+				var cmd tea.Cmd
+				m.actionState.input, cmd = m.actionState.input.Update(msg)
+				return m, cmd
+			}
+		}
+
+		// 3. Filter Input Mode
 		if m.isFiltering {
 			switch msg.Type {
 			case tea.KeyEnter:
@@ -304,10 +397,50 @@ func (m Model) Update(msg tea.Msg) (Model, tea.Cmd) {
 			}
 		}
 
-		// 2. Detail Split-Screen Inspector Mode
+		// 4. Detail Split-Screen Inspector Mode
 		if m.detailMode {
 			switch msg.String() {
-			case "esc", "q", "enter":
+			case "esc", "q":
+				m.detailMode = false
+				return m, nil
+			case "l":
+				if m.selectedCircuit != nil {
+					if m.selectedCircuit.Definition != nil {
+						m.linterModal.Open(m.selectedCircuit.Definition, m.width, m.height)
+					} else {
+						m.linterModal.Open(nil, m.width, m.height)
+						return m, FetchCircuitDetailCmd(m.client, m.selectedCircuit.ID)
+					}
+				}
+				return m, nil
+			case "r":
+				if m.selectedCircuit != nil {
+					return m, m.actionState.OpenHotSwap(m.selectedCircuit, m.width)
+				}
+				return m, nil
+			case "e":
+				if m.selectedCircuit != nil {
+					if m.selectedCircuit.Definition == nil {
+						return m, tea.Batch(
+							FetchCircuitDetailCmd(m.client, m.selectedCircuit.ID),
+							m.actionState.OpenExport(m.selectedCircuit, m.width),
+						)
+					}
+					return m, m.actionState.OpenExport(m.selectedCircuit, m.width)
+				}
+				return m, nil
+			case "d":
+				if m.selectedCircuit != nil {
+					var def *types.Circuit
+					if m.selectedCircuit.Definition != nil {
+						def = m.selectedCircuit.Definition
+					}
+					return m, func() tea.Msg {
+						return DryRunHandoffMsg{CircuitID: m.selectedCircuit.ID, Circuit: def}
+					}
+				}
+				return m, nil
+			case "enter":
 				m.detailMode = false
 				return m, nil
 			case "tab":
@@ -334,28 +467,65 @@ func (m Model) Update(msg tea.Msg) (Model, tea.Cmd) {
 					m.detailsVP.HalfViewUp()
 				}
 				return m, nil
-			case "pgdown", "d":
+			case "pgdown", "ctrl+d":
 				if m.focusedPanel == 0 {
 					m.treeVP.HalfViewDown()
 				} else {
 					m.detailsVP.HalfViewDown()
 				}
 				return m, nil
-			case "r":
-				if m.selectedCircuit != nil {
-					return m, FetchCircuitDetailCmd(m.client, m.selectedCircuit.ID)
-				}
-				return m, nil
 			}
 			return m, nil
 		}
 
-		// 3. Normal Table List Mode
+		// 5. Normal Table List Mode
 		switch msg.String() {
 		case "/":
 			m.isFiltering = true
 			m.filterInput.Focus()
 			return m, textinput.Blink
+
+		case "l":
+			sel := m.SelectedCircuit()
+			if sel != nil {
+				if sel.Definition != nil {
+					m.linterModal.Open(sel.Definition, m.width, m.height)
+				} else {
+					m.linterModal.Open(nil, m.width, m.height)
+					return m, FetchCircuitDetailCmd(m.client, sel.ID)
+				}
+			}
+			return m, nil
+
+		case "r":
+			sel := m.SelectedCircuit()
+			return m, m.actionState.OpenHotSwap(sel, m.width)
+
+		case "e":
+			sel := m.SelectedCircuit()
+			if sel != nil {
+				if sel.Definition == nil {
+					return m, tea.Batch(
+						FetchCircuitDetailCmd(m.client, sel.ID),
+						m.actionState.OpenExport(sel, m.width),
+					)
+				}
+				return m, m.actionState.OpenExport(sel, m.width)
+			}
+			return m, nil
+
+		case "d":
+			sel := m.SelectedCircuit()
+			if sel != nil {
+				var def *types.Circuit
+				if sel.Definition != nil {
+					def = sel.Definition
+				}
+				return m, func() tea.Msg {
+					return DryRunHandoffMsg{CircuitID: sel.ID, Circuit: def}
+				}
+			}
+			return m, nil
 
 		case "enter":
 			if len(m.filtered) > 0 {
@@ -382,10 +552,6 @@ func (m Model) Update(msg tea.Msg) (Model, tea.Cmd) {
 				m.applyFilter()
 				return m, nil
 			}
-
-		case "r":
-			m.loading = true
-			return m, FetchCircuitsCmd(m.client)
 
 		default:
 			// Forward up/down/page navigation to table
@@ -480,10 +646,21 @@ func (m *Model) updateDetailViewports() {
 
 // View renders the Circuits view component.
 func (m Model) View() string {
-	if m.detailMode {
-		return m.renderDetailSplitScreen()
+	if m.linterModal.IsActive() {
+		return m.linterModal.View()
 	}
-	return m.renderTableView()
+
+	var base string
+	if m.detailMode {
+		base = m.renderDetailSplitScreen()
+	} else {
+		base = m.renderTableView()
+	}
+
+	if m.actionState.IsActive() {
+		return base + "\n\n" + m.actionState.View()
+	}
+	return base
 }
 
 func (m Model) renderTableView() string {
@@ -536,10 +713,13 @@ func (m Model) renderTableView() string {
 
 	// 4. Footer Key Hints
 	hints := lipgloss.JoinHorizontal(lipgloss.Center,
-		styleHintKey.Render("Enter"), styleHintText.Render(" inspect DAG  │  "),
+		styleHintKey.Render("Enter"), styleHintText.Render(" inspect  │  "),
+		styleHintKey.Render("l"), styleHintText.Render(" lint  │  "),
+		styleHintKey.Render("r"), styleHintText.Render(" hot-swap  │  "),
+		styleHintKey.Render("e"), styleHintText.Render(" export  │  "),
+		styleHintKey.Render("d"), styleHintText.Render(" dry-run  │  "),
 		styleHintKey.Render("/"), styleHintText.Render(" filter  │  "),
-		styleHintKey.Render("↑/↓/j/k"), styleHintText.Render(" navigate  │  "),
-		styleHintKey.Render("r"), styleHintText.Render(" refresh"),
+		styleHintKey.Render("↑/↓/j/k"), styleHintText.Render(" navigate"),
 	)
 	sb.WriteString(hints)
 
@@ -602,10 +782,13 @@ func (m Model) renderDetailSplitScreen() string {
 		focusedName = "Details Inspector"
 	}
 	hints := lipgloss.JoinHorizontal(lipgloss.Center,
-		styleHintKey.Render("Esc/q/Enter"), styleHintText.Render(" back to list  │  "),
-		styleHintKey.Render("Tab"), styleHintText.Render(fmt.Sprintf(" switch focus (active: %s)  │  ", focusedName)),
-		styleHintKey.Render("↑/↓/j/k"), styleHintText.Render(" scroll  │  "),
-		styleHintKey.Render("r"), styleHintText.Render(" reload"),
+		styleHintKey.Render("Esc/q/Enter"), styleHintText.Render(" back  │  "),
+		styleHintKey.Render("l"), styleHintText.Render(" lint  │  "),
+		styleHintKey.Render("r"), styleHintText.Render(" hot-swap  │  "),
+		styleHintKey.Render("e"), styleHintText.Render(" export  │  "),
+		styleHintKey.Render("d"), styleHintText.Render(" dry-run  │  "),
+		styleHintKey.Render("Tab"), styleHintText.Render(fmt.Sprintf(" switch focus (%s)  │  ", focusedName)),
+		styleHintKey.Render("↑/↓/j/k"), styleHintText.Render(" scroll"),
 	)
 
 	return splitPanels + "\n" + hints

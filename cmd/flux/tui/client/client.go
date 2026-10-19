@@ -24,6 +24,7 @@ type Client interface {
 	GetStatus(ctx context.Context) (*StatusResponse, error)
 	GetCircuits(ctx context.Context) ([]CircuitSummary, error)
 	GetCircuit(ctx context.Context, id string) (*CircuitSummary, error)
+	PutCircuit(ctx context.Context, circuit *types.Circuit) (*CircuitSummary, error)
 	GetAutopilot(ctx context.Context) ([]AutopilotSession, error)
 	GetAlertHistory(ctx context.Context, circuitID string, limit int) ([]AlertRecord, error)
 	StreamAlerts(ctx context.Context) (<-chan AlertEvent, <-chan error, error)
@@ -165,6 +166,15 @@ func (c *HTTPClient) GetCircuit(ctx context.Context, id string) (*CircuitSummary
 	var summary CircuitSummary
 	path := fmt.Sprintf("/api/v1/circuits?id=%s", url.QueryEscape(id))
 	if err := c.doJSON(ctx, http.MethodGet, path, nil, &summary); err != nil {
+		return nil, err
+	}
+	return &summary, nil
+}
+
+// PutCircuit stores or hot-swaps a circuit definition via POST /api/v1/circuits.
+func (c *HTTPClient) PutCircuit(ctx context.Context, circuit *types.Circuit) (*CircuitSummary, error) {
+	var summary CircuitSummary
+	if err := c.doJSON(ctx, http.MethodPost, "/api/v1/circuits", circuit, &summary); err != nil {
 		return nil, err
 	}
 	return &summary, nil
@@ -459,6 +469,27 @@ func (l *LocalClient) GetCircuit(ctx context.Context, id string) (*CircuitSummar
 		Revision:      c.Version,
 		CreatedAt:     c.CreatedAt,
 		Definition:    c,
+	}, nil
+}
+
+// PutCircuit stores or hot-swaps a circuit in the local engine.
+func (l *LocalClient) PutCircuit(ctx context.Context, circuit *types.Circuit) (*CircuitSummary, error) {
+	if err := l.engine.PutCircuit(ctx, circuit); err != nil {
+		return nil, err
+	}
+	var cond string
+	if circuit.Root != nil {
+		cond = circuit.Root.Condition
+	}
+	return &CircuitSummary{
+		ID:            circuit.ID,
+		Tags:          circuit.Tags,
+		RootCondition: cond,
+		NodeCount:     countNodes(circuit.Root),
+		Status:        "LIVE",
+		Revision:      circuit.Version,
+		CreatedAt:     circuit.CreatedAt,
+		Definition:    circuit,
 	}, nil
 }
 

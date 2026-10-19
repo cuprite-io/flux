@@ -2,6 +2,8 @@ package circuits_test
 
 import (
 	"context"
+	"os"
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -20,7 +22,7 @@ type mockClient struct {
 }
 
 func (m *mockClient) GetStatus(ctx context.Context) (*client.StatusResponse, error) {
-	return &client.StatusResponse{Service: "flux-admin", Version: "0.23.0"}, nil
+	return &client.StatusResponse{Service: "flux-admin", Version: "0.24.0"}, nil
 }
 
 func (m *mockClient) GetCircuits(ctx context.Context) ([]client.CircuitSummary, error) {
@@ -40,6 +42,27 @@ func (m *mockClient) GetCircuit(ctx context.Context, id string) (*client.Circuit
 		}
 	}
 	return nil, nil
+}
+
+func (m *mockClient) PutCircuit(ctx context.Context, circuit *types.Circuit) (*client.CircuitSummary, error) {
+	if m.getErr != nil {
+		return nil, m.getErr
+	}
+	summ := client.CircuitSummary{
+		ID:         circuit.ID,
+		Tags:       circuit.Tags,
+		Definition: circuit,
+		Status:     "LIVE",
+		Revision:   circuit.Version,
+	}
+	for i, c := range m.circuits {
+		if c.ID == circuit.ID {
+			m.circuits[i] = summ
+			return &summ, nil
+		}
+	}
+	m.circuits = append(m.circuits, summ)
+	return &summ, nil
 }
 
 func (m *mockClient) GetAutopilot(ctx context.Context) ([]client.AutopilotSession, error) {
@@ -278,4 +301,253 @@ func TestCircuitsView_HighlightCode(t *testing.T) {
 	assert.Contains(t, highlighted, "payload")
 	assert.Contains(t, highlighted, "state")
 	assert.Contains(t, highlighted, "ALERT")
+}
+
+func TestCircuitsView_LinterModal(t *testing.T) {
+	mock := &mockClient{circuits: sampleTestCircuits()}
+	view := circuits.New(mock)
+	view.SetDimensions(100, 30)
+	msg := view.Init()()
+	view, _ = view.Update(msg)
+
+	assert.False(t, view.IsModalActive())
+
+	// 1. Press 'l' to open linter modal
+	view, cmd := view.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'l'}})
+	assert.Nil(t, cmd)
+	assert.True(t, view.IsModalActive())
+	assert.True(t, view.LinterModal().IsActive())
+
+	// Modal output should render diagnostics
+	modalOut := view.View()
+	assert.Contains(t, modalOut, "Circuit Linter Static Analysis")
+	assert.Contains(t, modalOut, "fraud_sentinel")
+
+	// 2. Test navigation within modal
+	view, _ = view.Update(tea.KeyMsg{Type: tea.KeyDown})
+	view, _ = view.Update(tea.KeyMsg{Type: tea.KeyUp})
+	view, _ = view.Update(tea.KeyMsg{Type: tea.KeyPgDown})
+	view, _ = view.Update(tea.KeyMsg{Type: tea.KeyPgUp})
+	assert.True(t, view.IsModalActive())
+
+	// 3. Test closing modal with 'l'
+	view, _ = view.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'l'}})
+	assert.False(t, view.IsModalActive())
+	assert.False(t, view.LinterModal().IsActive())
+
+	// 4. Test opening and closing with 'Esc'
+	view, _ = view.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'l'}})
+	assert.True(t, view.IsModalActive())
+	view, _ = view.Update(tea.KeyMsg{Type: tea.KeyEscape})
+	assert.False(t, view.IsModalActive())
+
+	// 5. Test opening in detail mode
+	view, _ = view.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	assert.True(t, view.IsDetail())
+	view, _ = view.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'l'}})
+	assert.True(t, view.IsModalActive())
+	view, _ = view.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'q'}})
+	assert.False(t, view.IsModalActive())
+	assert.True(t, view.IsDetail())
+}
+
+func TestCircuitsView_HotSwap(t *testing.T) {
+	mock := &mockClient{circuits: sampleTestCircuits()}
+	view := circuits.New(mock)
+	view.SetDimensions(100, 30)
+	msg := view.Init()()
+	view, _ = view.Update(msg)
+
+	// 1. Press 'r' to open Hot-Swap modal
+	view, cmd := view.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'r'}})
+	assert.NotNil(t, cmd)
+	assert.True(t, view.IsModalActive())
+	assert.Equal(t, circuits.ActionModalHotSwap, view.ActionState().ModalType())
+	assert.Contains(t, view.View(), "Hot-Swap Circuit Pipeline")
+
+	// 2. Press Esc to cancel
+	view, _ = view.Update(tea.KeyMsg{Type: tea.KeyEscape})
+	assert.False(t, view.IsModalActive())
+
+	// 3. Press 'r' and hit Enter with blank -> acts as refresh
+	view, _ = view.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'r'}})
+	assert.True(t, view.IsModalActive())
+	view, refreshCmd := view.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	assert.False(t, view.IsModalActive())
+	require.NotNil(t, refreshCmd)
+
+	// 4. Press 'r' with non-existent file -> error status
+	view, _ = view.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'r'}})
+	for _, r := range "/tmp/non_existent_circuit.json" {
+		view, _ = view.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{r}})
+	}
+	view, _ = view.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	assert.False(t, view.IsModalActive())
+	assert.Contains(t, view.StatusMsg(), "Hot-swap failed")
+
+	// 5. Create a valid JSON circuit file in temp dir
+	tmpDir := t.TempDir()
+	validJSON := filepath.Join(tmpDir, "new_circuit.json")
+	jsonContent := `{
+		"id": "hotswap_circuit",
+		"tags": ["hotswap", "test"],
+		"root": {
+			"name": "root_node",
+			"condition": "payload.valid == true",
+			"steps": [{"type": 0, "script": "let ok = true"}]
+		}
+	}`
+	err := os.WriteFile(validJSON, []byte(jsonContent), 0644)
+	require.NoError(t, err)
+
+	view, _ = view.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'r'}})
+	for _, r := range validJSON {
+		view, _ = view.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{r}})
+	}
+	view, putCmd := view.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	assert.False(t, view.IsModalActive())
+	assert.Contains(t, view.StatusMsg(), "Hot-swapped hotswap_circuit successfully")
+	require.NotNil(t, putCmd)
+
+	// Execute putCmd
+	loadedMsg := putCmd()
+	view, _ = view.Update(loadedMsg)
+	assert.Len(t, view.Circuits(), 3)
+
+	// 6. Test with valid YAML circuit file
+	validYAML := filepath.Join(tmpDir, "yaml_circuit.yaml")
+	yamlContent := `
+id: yaml_hotswap
+tags:
+  - yaml
+  - production
+root:
+  name: yaml_root
+  condition: payload.amount > 0
+`
+	err = os.WriteFile(validYAML, []byte(yamlContent), 0644)
+	require.NoError(t, err)
+
+	view, _ = view.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'r'}})
+	for _, r := range validYAML {
+		view, _ = view.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{r}})
+	}
+	view, putCmd2 := view.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	assert.False(t, view.IsModalActive())
+	assert.Contains(t, view.StatusMsg(), "Hot-swapped yaml_hotswap successfully")
+	require.NotNil(t, putCmd2)
+}
+
+func TestCircuitsView_Export(t *testing.T) {
+	mock := &mockClient{circuits: sampleTestCircuits()}
+	view := circuits.New(mock)
+	view.SetDimensions(100, 30)
+	msg := view.Init()()
+	view, _ = view.Update(msg)
+
+	// 1. Press 'e' to open Export prompt
+	view, cmd := view.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'e'}})
+	assert.NotNil(t, cmd)
+	assert.True(t, view.IsModalActive())
+	assert.Equal(t, circuits.ActionModalExport, view.ActionState().ModalType())
+	assert.Contains(t, view.View(), "Export Circuit Definition")
+
+	// 2. Press Esc to cancel
+	view, _ = view.Update(tea.KeyMsg{Type: tea.KeyEscape})
+	assert.False(t, view.IsModalActive())
+
+	// 3. Export to JSON file in temp dir
+	tmpDir := t.TempDir()
+	exportPathJSON := filepath.Join(tmpDir, "exported_fraud.json")
+
+	view, _ = view.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'e'}})
+	// Clear default and type path
+	for range 30 {
+		view, _ = view.Update(tea.KeyMsg{Type: tea.KeyBackspace})
+	}
+	for _, r := range exportPathJSON {
+		view, _ = view.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{r}})
+	}
+	view, _ = view.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	assert.False(t, view.IsModalActive())
+	assert.Contains(t, view.StatusMsg(), "Exported fraud_sentinel")
+
+	content, err := os.ReadFile(exportPathJSON)
+	require.NoError(t, err)
+	assert.Contains(t, string(content), "fraud_sentinel")
+
+	// 4. Export to YAML file
+	exportPathYAML := filepath.Join(tmpDir, "exported_fraud.yaml")
+	view, _ = view.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'e'}})
+	for range 40 {
+		view, _ = view.Update(tea.KeyMsg{Type: tea.KeyBackspace})
+	}
+	for _, r := range exportPathYAML {
+		view, _ = view.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{r}})
+	}
+	view, _ = view.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	assert.False(t, view.IsModalActive())
+	assert.Contains(t, view.StatusMsg(), "Exported fraud_sentinel")
+
+	yamlData, err := os.ReadFile(exportPathYAML)
+	require.NoError(t, err)
+	assert.Contains(t, string(yamlData), "fraud_sentinel")
+}
+
+func TestCircuitsView_DryRunHandoff(t *testing.T) {
+	mock := &mockClient{circuits: sampleTestCircuits()}
+	view := circuits.New(mock)
+	view.SetDimensions(100, 30)
+	msg := view.Init()()
+	view, _ = view.Update(msg)
+
+	// Press 'd' in table mode -> returns DryRunHandoffMsg
+	view, cmd := view.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'d'}})
+	require.NotNil(t, cmd)
+	handoffMsg := cmd()
+	require.IsType(t, circuits.DryRunHandoffMsg{}, handoffMsg)
+	dryMsg := handoffMsg.(circuits.DryRunHandoffMsg)
+	assert.Equal(t, "fraud_sentinel", dryMsg.CircuitID)
+	assert.NotNil(t, dryMsg.Circuit)
+
+	// Test 'd' in detail mode
+	view, _ = view.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	assert.True(t, view.IsDetail())
+	view, cmd2 := view.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'d'}})
+	require.NotNil(t, cmd2)
+	handoffMsg2 := cmd2()
+	require.IsType(t, circuits.DryRunHandoffMsg{}, handoffMsg2)
+	assert.Equal(t, "fraud_sentinel", handoffMsg2.(circuits.DryRunHandoffMsg).CircuitID)
+}
+
+func TestCircuitsView_LoadCircuitFromDisk_Errors(t *testing.T) {
+	// Empty path
+	_, err := circuits.LoadCircuitFromDisk("")
+	assert.Error(t, err)
+
+	// Missing file
+	_, err = circuits.LoadCircuitFromDisk("/path/does/not/exist.json")
+	assert.Error(t, err)
+
+	tmpDir := t.TempDir()
+
+	// Invalid syntax
+	badJSON := filepath.Join(tmpDir, "bad.json")
+	_ = os.WriteFile(badJSON, []byte("{invalid-json"), 0644)
+	_, err = circuits.LoadCircuitFromDisk(badJSON)
+	assert.Error(t, err)
+
+	// Missing ID
+	noID := filepath.Join(tmpDir, "no_id.json")
+	_ = os.WriteFile(noID, []byte(`{"root": {"name": "n1"}}`), 0644)
+	_, err = circuits.LoadCircuitFromDisk(noID)
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "missing mandatory 'id' field")
+
+	// Missing Root
+	noRoot := filepath.Join(tmpDir, "no_root.json")
+	_ = os.WriteFile(noRoot, []byte(`{"id": "c1"}`), 0644)
+	_, err = circuits.LoadCircuitFromDisk(noRoot)
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "missing mandatory 'root' execution node")
 }
