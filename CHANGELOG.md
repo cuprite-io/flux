@@ -7,6 +7,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.23.0] - 2026-10-19
+
+### Added
+
+- **Interactive Circuits & DAG Inspector (`:circuits`)** (`cmd/flux/tui/views/circuits`, `cmd/flux/tui/model.go`):
+  - Added dedicated `:circuits` view package displaying deployed decision pipelines in an interactive full-screen table.
+  - Implemented hierarchical ASCII/Unicode DAG tree generator (`cmd/flux/tui/views/circuits/tree.go`) with color-coded root nodes, child branches, guard conditions, and execution steps (`[VOLT]`, `[SINK]`, `[RETURN]`, `[ABORT]`, `[VM]`) with cycle protection.
+  - Implemented circuit specification & grammar inspector (`cmd/flux/tui/views/circuits/details.go`) with metadata summary, root guard evaluation, step-by-step breakdown, and syntax-highlighted VoltScript/CEL expressions.
+  - Implemented real-time fuzzy search / filtering (`/`) matching against circuit IDs, stream tags, and guard expressions with live match counter.
+  - Added split-screen detail inspector triggered by `<Enter>` on any circuit:
+    - Left viewport: Interactive DAG tree hierarchy.
+    - Right viewport: Detailed specification and step grammar.
+    - Full keyboard navigation with `Tab` (panel focus toggle), `↑`/`↓`/`j`/`k`/`PgUp`/`PgDown` (viewport scrolling), and `Esc`/`q`/`<Enter>` (return to table).
+  - Integrated circuits view into top-level TUI cockpit with dynamic reload on `:connect` and `:disconnect`.
+  - Added comprehensive test suites in `cmd/flux/tui/views/circuits/view_test.go` and `cmd/flux/tui/app_test.go`.
+
+---
+
 ## [0.22.0] - 2026-10-09
 
 ### Added

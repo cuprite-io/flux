@@ -16,6 +16,7 @@ import (
 	"github.com/charmbracelet/lipgloss"
 	"github.com/cuprite-io/flux"
 	"github.com/cuprite-io/flux/cmd/flux/tui/client"
+	"github.com/cuprite-io/flux/cmd/flux/tui/views/circuits"
 )
 
 // TickMsg triggers regular background UI refresh.
@@ -24,6 +25,7 @@ type TickMsg time.Time
 // Model is the top-level Bubble Tea model for the Flux shell.
 type Model struct {
 	client       client.Client
+	circuitsView circuits.Model
 	keys         KeyMap
 	currentView  ViewID
 	previousView ViewID
@@ -91,6 +93,7 @@ func NewModel(cfg Config) Model {
 
 	return Model{
 		client:       cli,
+		circuitsView: circuits.New(cli),
 		keys:         DefaultKeyMap(),
 		currentView:  ViewCircuits,
 		previousView: ViewCircuits,
@@ -111,11 +114,21 @@ func (m Model) Client() client.Client {
 	return m.client
 }
 
+// CircuitsView returns the Circuits view component.
+func (m Model) CircuitsView() circuits.Model {
+	return m.circuitsView
+}
+
 // SetDimensions updates the window size.
 func (m *Model) SetDimensions(w, h int) {
 	m.width = w
 	m.height = h
 	m.ready = true
+	contentHeight := h - 5
+	if contentHeight < 6 {
+		contentHeight = 6
+	}
+	m.circuitsView.SetDimensions(w-4, contentHeight-2)
 }
 
 // CurrentView returns the currently active view ID.
@@ -176,6 +189,7 @@ func (m Model) Init() tea.Cmd {
 	return tea.Batch(
 		TickCmd(),
 		m.WindowTitleCmd(),
+		m.circuitsView.Init(),
 	)
 }
 
@@ -186,6 +200,16 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
 		m.SetDimensions(msg.Width, msg.Height)
+
+	case circuits.CircuitsLoadedMsg:
+		var cmd tea.Cmd
+		m.circuitsView, cmd = m.circuitsView.Update(msg)
+		return m, cmd
+
+	case circuits.CircuitDetailLoadedMsg:
+		var cmd tea.Cmd
+		m.circuitsView, cmd = m.circuitsView.Update(msg)
+		return m, cmd
 
 	case TickMsg:
 		m.currentTime = time.Time(msg)
@@ -242,9 +266,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 							_ = m.client.Close()
 						}
 						m.client = cli
+						cmds = append(cmds, m.circuitsView.SetClient(m.client))
 					}
 					m.SetStatus(fmt.Sprintf("Connected to %s (Cluster Mode)", probeRes.URL), false)
-					return m, m.WindowTitleCmd()
+					cmds = append(cmds, m.WindowTitleCmd())
+					return m, tea.Batch(cmds...)
 				}
 				if strings.HasPrefix(trimmed, "token ") || trimmed == "token" {
 					tok := strings.TrimSpace(strings.TrimPrefix(trimmed, "token"))
@@ -263,9 +289,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 						_ = m.client.Close()
 					}
 					m.client, _ = client.NewLocalClient()
+					cmds = append(cmds, m.circuitsView.SetClient(m.client))
 					m.SetView(ViewCircuits)
 					m.SetStatus("Disconnected. Switched to Standalone Mode", false)
-					return m, m.WindowTitleCmd()
+					cmds = append(cmds, m.WindowTitleCmd())
+					return m, tea.Batch(cmds...)
 				}
 
 				if target, ok := ParseCommand(raw); ok {
@@ -287,6 +315,51 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			default:
 				var cmd tea.Cmd
 				m.commandInput, cmd = m.commandInput.Update(msg)
+				return m, cmd
+			}
+		}
+
+		// Active View-Specific Key Handlers
+		if m.currentView == ViewCircuits {
+			if m.circuitsView.IsFiltering() {
+				var cmd tea.Cmd
+				m.circuitsView, cmd = m.circuitsView.Update(msg)
+				return m, cmd
+			}
+			if m.circuitsView.IsDetail() {
+				if key.Matches(msg, m.keys.Command) {
+					m.commandMode = true
+					m.commandInput.Focus()
+					return m, textinput.Blink
+				}
+				var cmd tea.Cmd
+				m.circuitsView, cmd = m.circuitsView.Update(msg)
+				return m, cmd
+			}
+			if msg.String() == "/" {
+				var cmd tea.Cmd
+				m.circuitsView, cmd = m.circuitsView.Update(msg)
+				return m, cmd
+			}
+			if key.Matches(msg, m.keys.Enter) {
+				var cmd tea.Cmd
+				m.circuitsView, cmd = m.circuitsView.Update(msg)
+				return m, cmd
+			}
+			if key.Matches(msg, m.keys.Up) || key.Matches(msg, m.keys.Down) {
+				var cmd tea.Cmd
+				m.circuitsView, cmd = m.circuitsView.Update(msg)
+				return m, cmd
+			}
+			if key.Matches(msg, m.keys.Refresh) {
+				var cmd tea.Cmd
+				m.circuitsView, cmd = m.circuitsView.Update(msg)
+				m.SetStatus("Circuits refreshed.", false)
+				return m, cmd
+			}
+			if key.Matches(msg, m.keys.Escape) {
+				var cmd tea.Cmd
+				m.circuitsView, cmd = m.circuitsView.Update(msg)
 				return m, cmd
 			}
 		}
@@ -485,6 +558,13 @@ func (m Model) renderFooter() string {
 		} else {
 			left = StyleStatusMsg.Render("✓ " + m.statusMsg)
 		}
+	} else if m.currentView == ViewCircuits && m.circuitsView.IsFiltering() {
+		left = StyleStatusMsg.Render("Filter mode active. Type search query, Enter to accept, Esc to cancel.")
+	} else if m.currentView == ViewCircuits && m.circuitsView.IsDetail() {
+		left = StyleKeyHelp.Render("Press ") + StyleKey.Render("Esc/q/Enter") + StyleKeyHelp.Render(" back to list, ") +
+			StyleKey.Render("Tab") + StyleKeyHelp.Render(" switch panel, ") +
+			StyleKey.Render("↑/↓/j/k") + StyleKeyHelp.Render(" scroll, ") +
+			StyleKey.Render(":") + StyleKeyHelp.Render(" commands")
 	} else {
 		left = StyleKeyHelp.Render("Press ") + StyleKey.Render(":") + StyleKeyHelp.Render(" for commands, ") +
 			StyleKey.Render("Tab") + StyleKeyHelp.Render(" switch view, ") +
@@ -508,15 +588,10 @@ func (m Model) renderContent(height int) string {
 
 	switch m.currentView {
 	case ViewCircuits:
-		return panelStyle.Render(m.placeholderPanel(
-			"⚡ Deployed Circuits & DAGs (:circuits)",
-			"Displaying registered decision pipelines.",
-			[]string{
-				"• Displays all compiled streaming decision DAGs and active stream tags.",
-				"• Press Enter on a circuit to view full ASCII tree & VoltScript grammar.",
-				"• Press 'l' to lint circuits with internal/linter; 'r' to hot-swap from disk.",
-			},
-		))
+		if m.circuitsView.IsDetail() {
+			return StyleViewport.Render(m.circuitsView.View())
+		}
+		return panelStyle.Render(m.circuitsView.View())
 
 	case ViewAutopilot:
 		return panelStyle.Render(m.placeholderPanel(

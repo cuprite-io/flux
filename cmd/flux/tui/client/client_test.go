@@ -30,7 +30,7 @@ func newMockEngine() *mockEngine {
 	}
 }
 
-func (m *mockEngine) Version() string       { return "0.22.0" }
+func (m *mockEngine) Version() string       { return "0.23.0" }
 func (m *mockEngine) NodeID() string        { return "node-test-1" }
 func (m *mockEngine) LeaderID() string      { return "node-test-1" }
 func (m *mockEngine) IsLeader() bool        { return true }
@@ -149,7 +149,7 @@ func TestHTTPClient_FullLifecycle(t *testing.T) {
 	status, err := c.GetStatus(context.Background())
 	require.NoError(t, err)
 	assert.Equal(t, "flux-admin", status.Service)
-	assert.Equal(t, "0.22.0", status.Version)
+	assert.Equal(t, "0.23.0", status.Version)
 	assert.Equal(t, 2, status.ClusterNodes)
 	assert.True(t, status.IsLeader)
 

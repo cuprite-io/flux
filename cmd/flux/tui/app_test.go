@@ -10,6 +10,7 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/cuprite-io/flux/cmd/flux/tui"
+	"github.com/cuprite-io/flux/cmd/flux/tui/views/circuits"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -108,7 +109,7 @@ func TestTUI_DynamicConnectAndDisconnect(t *testing.T) {
 		}
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
-		_, _ = w.Write([]byte(`{"service":"flux-admin","version":"0.22.0","cluster_nodes":3,"leader_id":"test-leader"}`))
+		_, _ = w.Write([]byte(`{"service":"flux-admin","version":"0.23.0","cluster_nodes":3,"leader_id":"test-leader"}`))
 	}))
 	defer ts.Close()
 
@@ -298,7 +299,7 @@ func TestTUI_WindowTitle(t *testing.T) {
 		w.Header().Set("X-Flux-Admin", "true")
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
-		_, _ = w.Write([]byte(`{"service":"flux-admin","version":"0.22.0"}`))
+		_, _ = w.Write([]byte(`{"service":"flux-admin","version":"0.23.0"}`))
 	}))
 	defer ts.Close()
 
@@ -345,5 +346,144 @@ func TestTUI_TitleStackSaveAndRestore(t *testing.T) {
 	tui.RestoreWindowTitle(&buf)
 	assert.Equal(t, tui.RestoreTitleSeq, buf.String())
 }
+
+func TestTUI_CircuitsView_Interaction(t *testing.T) {
+	// 1. Mock Flux Admin server with circuits endpoints
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("X-Flux-Admin", "true")
+		w.Header().Set("Content-Type", "application/json")
+
+		if r.URL.Path == "/api/v1/status" {
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(`{"service":"flux-admin","version":"0.23.0","cluster_nodes":2,"leader_id":"node-1"}`))
+			return
+		}
+
+		if r.URL.Path == "/api/v1/circuits" {
+			id := r.URL.Query().Get("id")
+			if id == "fraud_evaluator" {
+				w.WriteHeader(http.StatusOK)
+				_, _ = w.Write([]byte(`{
+					"id": "fraud_evaluator",
+					"tags": ["payments", "fraud"],
+					"root_condition": "payload.amount > 1000",
+					"node_count": 2,
+					"status": "LIVE",
+					"revision": 1,
+					"definition": {
+						"id": "fraud_evaluator",
+						"tags": ["payments", "fraud"],
+						"root": {
+							"name": "check_amount",
+							"condition": "payload.amount > 1000",
+							"steps": [{"type": 0, "script": "let x = payload.amount"}],
+							"children": [
+								{
+									"name": "dispatch_alert",
+									"steps": [{"type": 1, "sink": "fraud_sink", "sink_type": "kafka"}]
+								}
+							]
+						}
+					}
+				}`))
+				return
+			}
+
+			// List
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(`[
+				{
+					"id": "fraud_evaluator",
+					"tags": ["payments", "fraud"],
+					"root_condition": "payload.amount > 1000",
+					"node_count": 2,
+					"status": "LIVE",
+					"revision": 1
+				},
+				{
+					"id": "telemetry_stream",
+					"tags": ["metrics"],
+					"root_condition": "payload.valid == true",
+					"node_count": 1,
+					"status": "SHADOW",
+					"revision": 3
+				}
+			]`))
+			return
+		}
+
+		w.WriteHeader(http.StatusNotFound)
+	}))
+	defer ts.Close()
+
+	// 2. Initialize TUI model with remote endpoint
+	model := tui.NewModel(tui.Config{Endpoint: ts.URL})
+	model.SetDimensions(120, 35)
+
+	// Fetch circuits via Init
+	cmds := model.Init()
+	require.NotNil(t, cmds)
+
+	// Fetch circuits directly through view to populate
+	loadedCmd := circuits.FetchCircuitsCmd(model.Client())
+	msg := loadedCmd()
+	newM, _ := model.Update(msg)
+	model = newM.(tui.Model)
+
+	// 3. Verify Table view renders both circuits
+	viewOutput := model.View()
+	assert.Contains(t, viewOutput, "fraud_evaluator")
+	assert.Contains(t, viewOutput, "telemetry_stream")
+	assert.Contains(t, viewOutput, "LIVE")
+	assert.Contains(t, viewOutput, "SHADOW")
+
+	// 4. Test Filter Mode: press '/'
+	newM, _ = model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'/'}})
+	model = newM.(tui.Model)
+	assert.True(t, model.CircuitsView().IsFiltering())
+
+	for _, r := range "fraud" {
+		newM, _ = model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{r}})
+		model = newM.(tui.Model)
+	}
+	assert.Contains(t, model.View(), "fraud_evaluator")
+	assert.NotContains(t, model.View(), "telemetry_stream")
+
+	// Press Enter to submit filter
+	newM, _ = model.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	model = newM.(tui.Model)
+	assert.False(t, model.CircuitsView().IsFiltering())
+
+	// 5. Test Split-Screen Inspector: press Enter
+	newM, detailCmd := model.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	model = newM.(tui.Model)
+	assert.True(t, model.CircuitsView().IsDetail())
+
+	// Deliver full circuit detail
+	if detailCmd != nil {
+		detailMsg := detailCmd()
+		newM, _ = model.Update(detailMsg)
+		model = newM.(tui.Model)
+	}
+
+	detailOutput := model.View()
+	assert.Contains(t, detailOutput, "DAG Hierarchy & Tree")
+	assert.Contains(t, detailOutput, "Circuit Specification & Grammar")
+	assert.Contains(t, detailOutput, "fraud_evaluator")
+	assert.Contains(t, detailOutput, "check_amount")
+	assert.Contains(t, detailOutput, "dispatch_alert")
+
+	// 6. Test Tab switches focus between panels
+	newM, _ = model.Update(tea.KeyMsg{Type: tea.KeyTab})
+	model = newM.(tui.Model)
+	assert.Contains(t, model.View(), "Circuit Specification & Grammar (Active)")
+
+	// 7. Test Esc returns back to table list
+	newM, _ = model.Update(tea.KeyMsg{Type: tea.KeyEscape})
+	model = newM.(tui.Model)
+	assert.False(t, model.CircuitsView().IsDetail())
+	assert.Contains(t, model.View(), "Deployed Decision Pipelines")
+}
+
 
 

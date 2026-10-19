@@ -35,7 +35,7 @@ type mockEngine struct {
 
 func newMockEngine() *mockEngine {
 	return &mockEngine{
-		version:     "0.22.0",
+		version:     "0.23.0",
 		nodeID:      "node-1",
 		leaderID:    "node-1",
 		isLeader:    true,
@@ -144,14 +144,14 @@ func TestAdminServer_StatusAndHandshake(t *testing.T) {
 	assert.Equal(t, http.StatusOK, resp.StatusCode)
 	assert.Equal(t, "true", resp.Header.Get("X-Flux-Admin"))
 	assert.Equal(t, "true", resp.Header.Get("X-Flux-Engine"))
-	assert.Equal(t, "0.22.0", resp.Header.Get("X-Flux-Version"))
+	assert.Equal(t, "0.23.0", resp.Header.Get("X-Flux-Version"))
 
 	var status admin.StatusResponse
 	err = json.NewDecoder(resp.Body).Decode(&status)
 	require.NoError(t, err)
 
 	assert.Equal(t, "flux-admin", status.Service)
-	assert.Equal(t, "0.22.0", status.Version)
+	assert.Equal(t, "0.23.0", status.Version)
 	assert.Equal(t, "node-1", status.NodeID)
 	assert.Equal(t, "node-1", status.LeaderID)
 	assert.True(t, status.IsLeader)
