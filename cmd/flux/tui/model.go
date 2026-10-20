@@ -16,6 +16,7 @@ import (
 	"github.com/charmbracelet/lipgloss"
 	"github.com/cuprite-io/flux"
 	"github.com/cuprite-io/flux/cmd/flux/tui/client"
+	tuisync "github.com/cuprite-io/flux/cmd/flux/tui/sync"
 	cacheview "github.com/cuprite-io/flux/cmd/flux/tui/views/cache"
 	"github.com/cuprite-io/flux/cmd/flux/tui/views/circuits"
 )
@@ -47,6 +48,7 @@ type Model struct {
 	syncedKeys  int
 	syncedBytes int64
 	syncEnabled bool
+	syncer      *tuisync.Syncer
 	currentTime time.Time
 
 	// Command Mode State (Vim-style :command)
@@ -93,6 +95,9 @@ func NewModel(cfg Config) Model {
 		cli, _ = client.NewLocalClient()
 	}
 
+	store := tuisync.NewStore()
+	syncEngine := tuisync.NewSyncer(store, tuisync.DefaultConfig())
+
 	return Model{
 		client:       cli,
 		circuitsView: circuits.New(cli),
@@ -106,6 +111,7 @@ func NewModel(cfg Config) Model {
 		token:        cfg.Token,
 		nodeCount:    1,
 		leaderID:     leaderID,
+		syncer:       syncEngine,
 		currentTime:  time.Now(),
 		commandInput: ti,
 		statusMsg:    "Flux Shell active. Press '?' for help, ':' for commands.",
@@ -125,6 +131,27 @@ func (m Model) CircuitsView() circuits.Model {
 // CacheView returns the Cache view component.
 func (m Model) CacheView() cacheview.Model {
 	return m.cacheView
+}
+
+// Syncer returns the local snapshot synchronization engine.
+func (m Model) Syncer() *tuisync.Syncer {
+	return m.syncer
+}
+
+// SnapshotStore returns the underlying local snapshot store.
+func (m Model) SnapshotStore() *tuisync.SnapshotStore {
+	if m.syncer != nil {
+		return m.syncer.Store()
+	}
+	return nil
+}
+
+// IsSyncEnabled returns true if local snapshot sync is active.
+func (m Model) IsSyncEnabled() bool {
+	if m.syncer != nil {
+		return m.syncer.IsEnabled()
+	}
+	return m.syncEnabled
 }
 
 // SetDimensions updates the window size.
@@ -236,6 +263,38 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.cacheView, cmd = m.cacheView.Update(msg)
 		return m, cmd
 
+	case tuisync.SyncStartedMsg:
+		return m, nil
+
+	case tuisync.SyncProgressMsg:
+		return m, nil
+
+	case tuisync.SyncCompletedMsg:
+		if m.syncer != nil {
+			m.syncer.HandleCompleted(msg)
+		}
+		if msg.Err != nil {
+			m.SetStatus(fmt.Sprintf("Local sync failed: %v", msg.Err), true)
+		} else {
+			m.syncedKeys = msg.KeyCount
+			m.syncedBytes = msg.TotalBytes
+			m.SetStatus(fmt.Sprintf("Local snapshot synced: %d keys (%s) in %s",
+				msg.KeyCount, tuisync.FormatBytes(msg.TotalBytes), msg.Duration.Round(time.Millisecond)), false)
+			if m.syncer != nil {
+				cmds = append(cmds, m.circuitsView.SetClient(m.syncer.Client(m.client)))
+				cmds = append(cmds, m.cacheView.SetClient(m.syncer.Client(m.client)))
+			}
+		}
+		return m, tea.Batch(cmds...)
+
+	case tuisync.SyncClearedMsg:
+		m.syncedKeys = 0
+		m.syncedBytes = 0
+		m.SetStatus("Local snapshot cache cleared.", false)
+		cmds = append(cmds, m.circuitsView.SetClient(m.client))
+		cmds = append(cmds, m.cacheView.SetClient(m.client))
+		return m, tea.Batch(cmds...)
+
 	case TickMsg:
 		m.currentTime = time.Time(msg)
 		if !m.statusExpiry.IsZero() && time.Now().After(m.statusExpiry) {
@@ -317,10 +376,51 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					m.client, _ = client.NewLocalClient()
 					cmds = append(cmds, m.circuitsView.SetClient(m.client))
 					cmds = append(cmds, m.cacheView.SetClient(m.client))
+					if m.syncer != nil {
+						cmds = append(cmds, m.syncer.SetEnabled(false, nil))
+					}
+					m.syncEnabled = false
+					m.syncedKeys = 0
+					m.syncedBytes = 0
 					m.SetView(ViewCircuits)
 					m.SetStatus("Disconnected. Switched to Standalone Mode", false)
 					cmds = append(cmds, m.WindowTitleCmd())
 					return m, tea.Batch(cmds...)
+				}
+
+				if trimmed == "sync" || strings.HasPrefix(trimmed, "sync ") {
+					if !m.isCluster {
+						m.SetStatus("Local sync is only active in Cluster Mode.", false)
+						return m, nil
+					}
+					sub := strings.TrimSpace(strings.TrimPrefix(trimmed, "sync"))
+					var newEnabled bool
+					switch sub {
+					case "off", "disable":
+						newEnabled = false
+					case "on", "enable":
+						newEnabled = true
+					default:
+						if m.syncer != nil {
+							newEnabled = !m.syncer.IsEnabled()
+						} else {
+							newEnabled = !m.syncEnabled
+						}
+					}
+
+					m.syncEnabled = newEnabled
+					var cmd tea.Cmd
+					if m.syncer != nil {
+						cmd = m.syncer.SetEnabled(newEnabled, m.client)
+					}
+					if newEnabled {
+						m.SetStatus("Local snapshot sync ENABLED. Pulling cluster state...", false)
+					} else {
+						m.syncedKeys = 0
+						m.syncedBytes = 0
+						m.SetStatus("Local snapshot sync DISABLED.", false)
+					}
+					return m, cmd
 				}
 
 				if target, ok := ParseCommand(raw); ok {
@@ -329,7 +429,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				} else if strings.TrimSpace(raw) == "q" || strings.TrimSpace(raw) == "quit" {
 					return m, tea.Quit
 				} else if raw != "" {
-					m.SetStatus(fmt.Sprintf("Unknown command: %q (try :circuits, :eval, :autopilot, :alerts, :connect <addr>, :disconnect)", raw), true)
+					m.SetStatus(fmt.Sprintf("Unknown command: %q (try :circuits, :eval, :autopilot, :alerts, :connect <addr>, :disconnect, :sync)", raw), true)
 				}
 				return m, nil
 
@@ -515,18 +615,36 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 
 		case key.Matches(msg, m.keys.Refresh):
+			if m.syncEnabled && m.isCluster && m.syncer != nil {
+				cmd := m.syncer.SetEnabled(true, m.client)
+				m.SetStatus("Refreshed view data and pulling local snapshot...", false)
+				return m, cmd
+			}
 			m.SetStatus("View refreshed.", false)
 
 		case key.Matches(msg, m.keys.Sync):
 			if !m.isCluster {
 				m.SetStatus("Local sync is only active in Cluster Mode.", false)
 			} else {
-				m.syncEnabled = !m.syncEnabled
-				if m.syncEnabled {
-					m.SetStatus("Local snapshot sync ENABLED.", false)
+				var newEnabled bool
+				if m.syncer != nil {
+					newEnabled = !m.syncer.IsEnabled()
 				} else {
+					newEnabled = !m.syncEnabled
+				}
+				m.syncEnabled = newEnabled
+				var cmd tea.Cmd
+				if m.syncer != nil {
+					cmd = m.syncer.SetEnabled(newEnabled, m.client)
+				}
+				if newEnabled {
+					m.SetStatus("Local snapshot sync ENABLED. Pulling cluster state...", false)
+				} else {
+					m.syncedKeys = 0
+					m.syncedBytes = 0
 					m.SetStatus("Local snapshot sync DISABLED.", false)
 				}
+				return m, cmd
 			}
 		}
 	}
@@ -579,9 +697,11 @@ func (m Model) renderHeader() string {
 		leaderInfo := fmt.Sprintf("Leader: %s", m.leaderID)
 		endpointInfo := fmt.Sprintf("Remote: %s", m.endpoint)
 
-		syncInfo := "Local Sync: OFF"
-		if m.syncEnabled {
-			syncInfo = fmt.Sprintf("Local Sync: ON (%d keys)", m.syncedKeys)
+		syncBadge := "Local Sync: OFF"
+		if m.syncer != nil {
+			syncBadge = m.syncer.HeaderBadge()
+		} else if m.syncEnabled {
+			syncBadge = fmt.Sprintf("Local Sync: ON (%d keys)", m.syncedKeys)
 		}
 
 		left = lipgloss.JoinHorizontal(lipgloss.Center,
@@ -589,7 +709,7 @@ func (m Model) renderHeader() string {
 			"  │  ", StyleHeaderItem.Render(clusterInfo),
 			"  │  ", StyleHeaderLeader.Render(leaderInfo),
 			"  │  ", StyleHeaderItem.Render(endpointInfo),
-			"  │  ", StyleHeaderSynced.Render(syncInfo),
+			"  │  ", StyleHeaderSynced.Render(syncBadge),
 		)
 	}
 
@@ -764,6 +884,7 @@ func (m Model) renderHelpView() string {
 		{":connect <addr> [tok]", "Connect to remote Flux control plane (e.g. localhost:9090 [token])"},
 		{":token <secret>", "Set or update authentication token for connection"},
 		{":disconnect", "Disconnect from remote cluster and switch to Standalone mode"},
+		{":sync [on|off]", "Enable, disable, or toggle local snapshot synchronization"},
 		{"s", "Toggle opt-in local snapshot synchronization (Cluster mode)"},
 		{"r", "Force refresh active view data"},
 		{"Enter", "Select / drill into item details"},

@@ -12,6 +12,7 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/cuprite-io/flux/cmd/flux/tui"
+	tuisync "github.com/cuprite-io/flux/cmd/flux/tui/sync"
 	cacheview "github.com/cuprite-io/flux/cmd/flux/tui/views/cache"
 	"github.com/cuprite-io/flux/cmd/flux/tui/views/circuits"
 	"github.com/stretchr/testify/assert"
@@ -224,18 +225,95 @@ func TestTUI_SyncToggle(t *testing.T) {
 	model := newM.(tui.Model)
 	assert.Contains(t, model.View(), "Cluster Mode")
 
-	// 2. In cluster, sync toggles on and off
+	// 2. In cluster, sync toggles into syncing and then off
 	mCluster := tui.NewModel(tui.Config{Endpoint: "localhost:9090"})
-	mCluster.SetDimensions(100, 30)
+	mCluster.SetDimensions(160, 40)
 	assert.Contains(t, mCluster.View(), "Local Sync: OFF")
+	assert.False(t, mCluster.IsSyncEnabled())
 
-	newM, _ = mCluster.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'s'}})
+	// Press 's' to enable
+	newM, cmd := mCluster.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'s'}})
 	model = newM.(tui.Model)
-	assert.Contains(t, model.View(), "Local Sync: ON")
+	assert.True(t, model.IsSyncEnabled())
+	assert.Contains(t, model.View(), "Local Sync: [SYNCING...]")
+	assert.NotNil(t, cmd)
 
+	// Simulate SyncCompletedMsg
+	newM, _ = model.Update(tuisync.SyncCompletedMsg{
+		KeyCount:   120,
+		TotalBytes: 1468006, // ~1.4MB
+		Duration:   25 * time.Millisecond,
+	})
+	model = newM.(tui.Model)
+	assert.Contains(t, model.View(), "[SYNCED: 1.4MB, 120 keys]")
+
+	// Press 's' to disable
 	newM, _ = model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'s'}})
 	model = newM.(tui.Model)
+	assert.False(t, model.IsSyncEnabled())
 	assert.Contains(t, model.View(), "Local Sync: OFF")
+}
+
+func TestTUI_SyncEngineCommandsAndLifecycle(t *testing.T) {
+	m := tui.NewModel(tui.Config{Endpoint: "127.0.0.1:9090"})
+	m.SetDimensions(160, 40)
+	assert.False(t, m.IsSyncEnabled())
+	require.NotNil(t, m.Syncer())
+	require.NotNil(t, m.SnapshotStore())
+
+	// 1. Test :sync command to toggle ON
+	newM, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{':'}})
+	model := newM.(tui.Model)
+	for _, r := range "sync" {
+		newM, _ = model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{r}})
+		model = newM.(tui.Model)
+	}
+	newM, cmd := model.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	model = newM.(tui.Model)
+	assert.True(t, model.IsSyncEnabled())
+	assert.NotNil(t, cmd)
+	assert.Contains(t, model.View(), "Local Sync: [SYNCING...]")
+
+	// 2. Complete sync
+	newM, _ = model.Update(tuisync.SyncCompletedMsg{
+		KeyCount:   50,
+		TotalBytes: 1048576, // 1.0MB
+		Duration:   10 * time.Millisecond,
+	})
+	model = newM.(tui.Model)
+	assert.Contains(t, model.View(), "[SYNCED: 1.0MB, 50 keys]")
+
+	// 3. Test :sync off command
+	newM, _ = model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{':'}})
+	model = newM.(tui.Model)
+	for _, r := range "sync off" {
+		newM, _ = model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{r}})
+		model = newM.(tui.Model)
+	}
+	newM, _ = model.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	model = newM.(tui.Model)
+	assert.False(t, model.IsSyncEnabled())
+	assert.Contains(t, model.View(), "Local Sync: OFF")
+
+	// 4. Test :sync on command
+	newM, _ = model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{':'}})
+	model = newM.(tui.Model)
+	for _, r := range "sync on" {
+		newM, _ = model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{r}})
+		model = newM.(tui.Model)
+	}
+	newM, _ = model.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	model = newM.(tui.Model)
+	assert.True(t, model.IsSyncEnabled())
+	assert.Contains(t, model.View(), "Local Sync: [SYNCING...]")
+
+	// 5. Simulate Sync Error
+	newM, _ = model.Update(tuisync.SyncCompletedMsg{
+		Err: fmt.Errorf("connection refused"),
+	})
+	model = newM.(tui.Model)
+	assert.Contains(t, model.Syncer().HeaderBadge(), "SYNC ERR: connection refused")
+	assert.Contains(t, model.View(), "Local sync failed: connection refused")
 }
 
 func TestTUI_TickAndUpdate(t *testing.T) {

@@ -7,6 +7,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.26.0] - 2026-10-20
+
+### Added
+
+- **Opt-in Local Data Synchronization Engine (`:sync`)** (`cmd/flux/tui/sync`, `cmd/flux/tui/model.go`):
+  - **Thread-Safe In-Memory Snapshot Store (`store.go`)**:
+    - Implemented `SnapshotStore` providing bounded, atomic in-memory caching of cluster status, circuits, cache keys, eagerly inspected key values, alert history, and autopilot sessions in local laptop RAM.
+    - Implemented sub-millisecond local regex and substring search (`SnapshotStore.Search`) across circuits, tags, conditions, cache keys, inspected values, and alert payloads with snippet extraction.
+    - Implemented `SnapshotClient` adapter implementing `client.Client`, resolving read queries locally from RAM when synced and enabling fully offline TUI exploration without ongoing network requests.
+    - Added `FormatBytes` utility converting raw byte counts into human-readable representations (`B`, `KB`, `MB`, `GB`).
+  - **Syncer Engine & Bubble Tea Integration (`syncer.go`, `model.go`)**:
+    - Implemented `Syncer` state machine orchestrating `DISABLED`, `SYNCING`, `SYNCED`, and `ERROR` lifecycle transitions.
+    - Added asynchronous `FetchSnapshotCmd` pipeline and Bubble Tea messages (`SyncStartedMsg`, `SyncProgressMsg`, `SyncCompletedMsg`, `SyncClearedMsg`).
+    - Integrated real-time header sync badge into `renderHeader()` displaying sync state, memory footprint, and key counts (`[SYNCED: 1.4MB, 120 keys]`, `[SYNCING...]`, `Local Sync: OFF`, `[SYNC ERR: ...]`).
+    - Added `:sync`, `:sync on`, `:sync off` commands and hotkey `s` to toggle local snapshot synchronization in Cluster Mode.
+    - Automatic offline view handoff: connected views (`CircuitsView`, `CacheView`) seamlessly switch to the local snapshot client upon synchronization.
+    - Integrated sync cleanup on `:disconnect` and snapshot reset on toggle off.
+
+---
+
 ## [0.25.0] - 2026-10-19
 
 ### Added
