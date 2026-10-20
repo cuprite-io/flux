@@ -120,3 +120,23 @@ type AlertEvent struct {
 	Payload   map[string]any `json:"payload"`
 	Timestamp time.Time      `json:"timestamp"`
 }
+
+// CacheKeyInfo is the metadata returned for keys in the Cache view.
+type CacheKeyInfo struct {
+	Key       string        `json:"key"`
+	Type      string        `json:"type"` // "string", "map", "set", "window"
+	Size      int           `json:"size"`
+	TTL       time.Duration `json:"ttl"`
+	ExpiresAt time.Time     `json:"expires_at,omitempty"`
+}
+
+// CacheKeyDetail is the complete inspection data returned for a single cache key.
+type CacheKeyDetail struct {
+	Key       string        `json:"key"`
+	Type      string        `json:"type"`
+	Size      int           `json:"size"`
+	TTL       time.Duration `json:"ttl"`
+	ExpiresAt time.Time     `json:"expires_at,omitempty"`
+	Value     any           `json:"value"`
+}
+

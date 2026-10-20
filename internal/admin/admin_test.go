@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"strings"
@@ -32,17 +33,20 @@ type mockEngine struct {
 	observers     map[uint64]func(admin.AlertEvent)
 	nextObsID     uint64
 	feedbackCalls []history.Feedback
+	cacheKeys     []admin.CacheKeyInfo
+	cacheDetail   map[string]*admin.CacheKeyDetail
 }
 
 func newMockEngine() *mockEngine {
 	return &mockEngine{
-		version:     "0.24.0",
+		version:     "0.25.0",
 		nodeID:      "node-1",
 		leaderID:    "node-1",
 		isLeader:    true,
 		activeNodes: []string{"node-1", "node-2"},
 		circuits:    make(map[string]*types.Circuit),
 		observers:   make(map[uint64]func(admin.AlertEvent)),
+		cacheDetail: make(map[string]*admin.CacheKeyDetail),
 	}
 }
 
@@ -131,6 +135,27 @@ func (m *mockEngine) RegisterAlertObserver(obs func(evt admin.AlertEvent)) func(
 	}
 }
 
+func (m *mockEngine) ScanCacheKeys(ctx context.Context, prefix string, limit int) ([]admin.CacheKeyInfo, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	var res []admin.CacheKeyInfo
+	for _, k := range m.cacheKeys {
+		if prefix == "" || strings.HasPrefix(k.Key, prefix) {
+			res = append(res, k)
+		}
+	}
+	return res, nil
+}
+
+func (m *mockEngine) InspectCacheKey(ctx context.Context, key string) (*admin.CacheKeyDetail, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if d, ok := m.cacheDetail[key]; ok {
+		return d, nil
+	}
+	return nil, errors.New("key not found")
+}
+
 func (m *mockEngine) fireAlert(evt admin.AlertEvent) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -155,14 +180,14 @@ func TestAdminServer_StatusAndHandshake(t *testing.T) {
 	assert.Equal(t, http.StatusOK, resp.StatusCode)
 	assert.Equal(t, "true", resp.Header.Get("X-Flux-Admin"))
 	assert.Equal(t, "true", resp.Header.Get("X-Flux-Engine"))
-	assert.Equal(t, "0.24.0", resp.Header.Get("X-Flux-Version"))
+	assert.Equal(t, "0.25.0", resp.Header.Get("X-Flux-Version"))
 
 	var status admin.StatusResponse
 	err = json.NewDecoder(resp.Body).Decode(&status)
 	require.NoError(t, err)
 
 	assert.Equal(t, "flux-admin", status.Service)
-	assert.Equal(t, "0.24.0", status.Version)
+	assert.Equal(t, "0.25.0", status.Version)
 	assert.Equal(t, "node-1", status.NodeID)
 	assert.Equal(t, "node-1", status.LeaderID)
 	assert.True(t, status.IsLeader)
@@ -342,4 +367,72 @@ func TestAdminServer_AlertStreamSSE(t *testing.T) {
 		}
 	}
 	assert.True(t, eventFound, "should receive alert event over SSE stream")
+}
+
+func TestAdminServer_CacheEndpoints(t *testing.T) {
+	mockEng := newMockEngine()
+	mockEng.cacheKeys = []admin.CacheKeyInfo{
+		{Key: "alert:history:fraud_sentinel", Type: "map", Size: 10},
+		{Key: "entity:user:42", Type: "string", Size: 35},
+		{Key: "schema:payments", Type: "set", Size: 2},
+	}
+	mockEng.cacheDetail["entity:user:42"] = &admin.CacheKeyDetail{
+		Key:   "entity:user:42",
+		Type:  "string",
+		Size:  35,
+		Value: `{"id":42,"role":"admin"}`,
+	}
+
+	srv, err := admin.NewServer(mockEng, admin.Config{Addr: "127.0.0.1:0"})
+	require.NoError(t, err)
+	require.NoError(t, srv.Start())
+	defer srv.Stop(context.Background())
+
+	// 1. GET /api/v1/cache/keys without prefix
+	resp, err := http.Get(srv.URL() + "/api/v1/cache/keys")
+	require.NoError(t, err)
+	defer resp.Body.Close()
+	assert.Equal(t, http.StatusOK, resp.StatusCode)
+
+	var keys []admin.CacheKeyInfo
+	err = json.NewDecoder(resp.Body).Decode(&keys)
+	require.NoError(t, err)
+	assert.Len(t, keys, 3)
+
+	// 2. GET /api/v1/cache/keys?prefix=entity:
+	resp2, err := http.Get(srv.URL() + "/api/v1/cache/keys?prefix=entity:")
+	require.NoError(t, err)
+	defer resp2.Body.Close()
+	assert.Equal(t, http.StatusOK, resp2.StatusCode)
+
+	var filteredKeys []admin.CacheKeyInfo
+	err = json.NewDecoder(resp2.Body).Decode(&filteredKeys)
+	require.NoError(t, err)
+	assert.Len(t, filteredKeys, 1)
+	assert.Equal(t, "entity:user:42", filteredKeys[0].Key)
+
+	// 3. GET /api/v1/cache/item?key=entity:user:42
+	resp3, err := http.Get(srv.URL() + "/api/v1/cache/item?key=entity:user:42")
+	require.NoError(t, err)
+	defer resp3.Body.Close()
+	assert.Equal(t, http.StatusOK, resp3.StatusCode)
+
+	var detail admin.CacheKeyDetail
+	err = json.NewDecoder(resp3.Body).Decode(&detail)
+	require.NoError(t, err)
+	assert.Equal(t, "entity:user:42", detail.Key)
+	assert.Equal(t, "string", detail.Type)
+	assert.Equal(t, `{"id":42,"role":"admin"}`, detail.Value)
+
+	// 4. GET /api/v1/cache/item missing key parameter -> 400
+	resp4, err := http.Get(srv.URL() + "/api/v1/cache/item")
+	require.NoError(t, err)
+	defer resp4.Body.Close()
+	assert.Equal(t, http.StatusBadRequest, resp4.StatusCode)
+
+	// 5. GET /api/v1/cache/item non-existent key -> 404
+	resp5, err := http.Get(srv.URL() + "/api/v1/cache/item?key=missing:key")
+	require.NoError(t, err)
+	defer resp5.Body.Close()
+	assert.Equal(t, http.StatusNotFound, resp5.StatusCode)
 }

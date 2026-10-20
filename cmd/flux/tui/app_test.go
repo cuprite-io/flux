@@ -12,6 +12,7 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/cuprite-io/flux/cmd/flux/tui"
+	cacheview "github.com/cuprite-io/flux/cmd/flux/tui/views/cache"
 	"github.com/cuprite-io/flux/cmd/flux/tui/views/circuits"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -111,7 +112,7 @@ func TestTUI_DynamicConnectAndDisconnect(t *testing.T) {
 		}
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
-		_, _ = w.Write([]byte(`{"service":"flux-admin","version":"0.24.0","cluster_nodes":3,"leader_id":"test-leader"}`))
+		_, _ = w.Write([]byte(`{"service":"flux-admin","version":"0.25.0","cluster_nodes":3,"leader_id":"test-leader"}`))
 	}))
 	defer ts.Close()
 
@@ -301,7 +302,7 @@ func TestTUI_WindowTitle(t *testing.T) {
 		w.Header().Set("X-Flux-Admin", "true")
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
-		_, _ = w.Write([]byte(`{"service":"flux-admin","version":"0.24.0"}`))
+		_, _ = w.Write([]byte(`{"service":"flux-admin","version":"0.25.0"}`))
 	}))
 	defer ts.Close()
 
@@ -357,7 +358,7 @@ func TestTUI_CircuitsView_Interaction(t *testing.T) {
 
 		if r.URL.Path == "/api/v1/status" {
 			w.WriteHeader(http.StatusOK)
-			_, _ = w.Write([]byte(`{"service":"flux-admin","version":"0.24.0","cluster_nodes":2,"leader_id":"node-1"}`))
+			_, _ = w.Write([]byte(`{"service":"flux-admin","version":"0.25.0","cluster_nodes":2,"leader_id":"node-1"}`))
 			return
 		}
 
@@ -519,7 +520,7 @@ func TestTUI_CircuitsView_Actions(t *testing.T) {
 
 		if r.URL.Path == "/api/v1/status" {
 			w.WriteHeader(http.StatusOK)
-			_, _ = w.Write([]byte(`{"service":"flux-admin","version":"0.24.0","cluster_nodes":2,"leader_id":"node-1"}`))
+			_, _ = w.Write([]byte(`{"service":"flux-admin","version":"0.25.0","cluster_nodes":2,"leader_id":"node-1"}`))
 			return
 		}
 
@@ -668,6 +669,167 @@ func TestTUI_CircuitsView_Actions(t *testing.T) {
 	model = newM.(tui.Model)
 	assert.Equal(t, tui.ViewEval, model.CurrentView())
 	assert.Contains(t, model.View(), "Transferred circuit \"fraud_evaluator\" to Dry-Run Playground")
+}
+
+func TestTUI_CacheView_Interaction(t *testing.T) {
+	mockKeysJSON := `[
+		{"key":"alert:history:fraud_evaluator","type":"map","size":5,"ttl":-1},
+		{"key":"schema:transactions","type":"string","size":120,"ttl":3600},
+		{"key":"flux:window:rate_limiter","type":"window","size":10,"ttl":60}
+	]`
+
+	mockSchemaDetailJSON := `{
+		"key": "schema:transactions",
+		"type": "string",
+		"size": 120,
+		"ttl": 3600,
+		"value": "{\"user_id\":\"string\",\"amount\":\"float\",\"timestamp\":\"int\"}"
+	}`
+
+	mockAlertDetailJSON := `{
+		"key": "alert:history:fraud_evaluator",
+		"type": "map",
+		"size": 5,
+		"ttl": -1,
+		"map_value": {
+			"total_alerts": "42",
+			"last_alert": "high_amount"
+		}
+	}`
+
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("X-Flux-Admin", "true")
+		w.Header().Set("Content-Type", "application/json")
+
+		if r.URL.Path == "/api/v1/status" {
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(`{"service":"flux-admin","version":"0.25.0","cluster_nodes":2,"leader_id":"node-1"}`))
+			return
+		}
+
+		if r.URL.Path == "/api/v1/cache/keys" {
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(mockKeysJSON))
+			return
+		}
+
+		if r.URL.Path == "/api/v1/cache/item" {
+			key := r.URL.Query().Get("key")
+			if key == "schema:transactions" {
+				w.WriteHeader(http.StatusOK)
+				_, _ = w.Write([]byte(mockSchemaDetailJSON))
+				return
+			}
+			if key == "alert:history:fraud_evaluator" {
+				w.WriteHeader(http.StatusOK)
+				_, _ = w.Write([]byte(mockAlertDetailJSON))
+				return
+			}
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(`{"key":"` + key + `","type":"string","size":10,"ttl":-1,"value":"test"}`))
+			return
+		}
+
+		w.WriteHeader(http.StatusNotFound)
+	}))
+	defer ts.Close()
+
+	model := tui.NewModel(tui.Config{Endpoint: ts.URL})
+	model.SetDimensions(120, 35)
+
+	// Switch to Cache view via :cache command
+	newM, _ := model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{':'}})
+	model = newM.(tui.Model)
+	for _, r := range "cache" {
+		newM, _ = model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{r}})
+		model = newM.(tui.Model)
+	}
+	newM, _ = model.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	model = newM.(tui.Model)
+	assert.Equal(t, tui.ViewCache, model.CurrentView())
+
+	// Fetch cache keys
+	fetchCmd := cacheview.FetchCacheKeysCmd(model.Client(), "")
+	keysMsg := fetchCmd()
+	newM, autoCmd := model.Update(keysMsg)
+	model = newM.(tui.Model)
+
+	// Auto-fetches detail for first item
+	if autoCmd != nil {
+		detailMsg := autoCmd()
+		newM, _ = model.Update(detailMsg)
+		model = newM.(tui.Model)
+	}
+
+	viewOutput := model.View()
+	assert.Contains(t, viewOutput, "Keys & Namespaces")
+	assert.Contains(t, viewOutput, "Key Data Inspector")
+	assert.Contains(t, viewOutput, "alert:history:fraud_evaluator")
+	assert.Contains(t, viewOutput, "schema:transactions")
+	assert.Contains(t, viewOutput, "flux:window:rate_limiter")
+
+	// 1. Test Tab: Toggle panel focus
+	assert.Equal(t, 0, model.CacheView().FocusedPanel())
+	newM, _ = model.Update(tea.KeyMsg{Type: tea.KeyTab})
+	model = newM.(tui.Model)
+	assert.Equal(t, 1, model.CacheView().FocusedPanel())
+	assert.Contains(t, model.View(), "Key Data Inspector (Active)")
+
+	newM, _ = model.Update(tea.KeyMsg{Type: tea.KeyTab})
+	model = newM.(tui.Model)
+	assert.Equal(t, 0, model.CacheView().FocusedPanel())
+	assert.Contains(t, model.View(), "Keys & Namespaces (Active)")
+
+	// 2. Test Down navigation & Enter inspection
+	newM, downCmd := model.Update(tea.KeyMsg{Type: tea.KeyDown})
+	model = newM.(tui.Model)
+	if downCmd != nil {
+		newM, _ = model.Update(downCmd())
+		model = newM.(tui.Model)
+	}
+
+	newM, enterCmd := model.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	model = newM.(tui.Model)
+	if enterCmd != nil {
+		newM, _ = model.Update(enterCmd())
+		model = newM.(tui.Model)
+	}
+	assert.Contains(t, model.View(), "schema:transactions")
+
+	// 3. Test 'v' (Raw String View Toggle)
+	newM, _ = model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'v'}})
+	model = newM.(tui.Model)
+	assert.Contains(t, model.View(), "RAW")
+
+	newM, _ = model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'v'}})
+	model = newM.(tui.Model)
+	assert.Contains(t, model.View(), "FORMATTED")
+
+	// 4. Test '/' (Fuzzy Filter)
+	newM, _ = model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'/'}})
+	model = newM.(tui.Model)
+	assert.True(t, model.CacheView().IsFiltering())
+
+	for _, r := range "schema" {
+		newM, _ = model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{r}})
+		model = newM.(tui.Model)
+	}
+	newM, _ = model.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	model = newM.(tui.Model)
+	assert.False(t, model.CacheView().IsFiltering())
+	assert.Contains(t, model.View(), "schema:transactions")
+	assert.NotContains(t, model.View(), "alert:history:fraud_evaluator")
+
+	// Press Esc to clear filter
+	newM, _ = model.Update(tea.KeyMsg{Type: tea.KeyEscape})
+	model = newM.(tui.Model)
+	assert.Contains(t, model.View(), "alert:history:fraud_evaluator")
+
+	// 5. Test 'r' (Refresh)
+	newM, refCmd := model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'r'}})
+	model = newM.(tui.Model)
+	assert.Contains(t, model.View(), "Refreshing cache keys")
+	require.NotNil(t, refCmd)
 }
 
 

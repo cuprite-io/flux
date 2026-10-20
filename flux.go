@@ -1050,3 +1050,136 @@ func (e *Engine) AdminServer() *admin.Server {
 	return e.adminServer
 }
 
+// ScanCacheKeys lists cached keys matching an optional prefix from the CacheBackend
+// by performing a fast subsystem aggregation across Flux's registered domain namespaces.
+func (e *Engine) ScanCacheKeys(ctx context.Context, prefix string, limit int) ([]admin.CacheKeyInfo, error) {
+	if e.cache == nil {
+		return nil, errors.New("flux: cache backend not initialized")
+	}
+
+	if limit <= 0 {
+		limit = 1000
+	}
+	keySet := make(map[string]admin.CacheKeyInfo)
+
+	// Subsystem: Circuits Registry
+	if circuitsMap, err := e.cache.MapGetAll(ctx, "registry:circuits"); err == nil && len(circuitsMap) > 0 {
+		keySet["registry:circuits"] = admin.CacheKeyInfo{
+			Key:  "registry:circuits",
+			Type: "map",
+			Size: len(circuitsMap),
+		}
+		for circuitID, rawJSON := range circuitsMap {
+			var circ types.Circuit
+			if err := json.Unmarshal([]byte(rawJSON), &circ); err == nil {
+				for _, tag := range circ.Tags {
+					if tag != "" {
+						tagKey := "registry:tag:" + tag
+						keySet[tagKey] = admin.CacheKeyInfo{Key: tagKey, Type: "set"}
+						schemaKey := "schema:" + tag
+						if val, err := e.cache.Get(ctx, schemaKey); err == nil && len(val) > 0 {
+							keySet[schemaKey] = admin.CacheKeyInfo{Key: schemaKey, Type: "string", Size: len(val)}
+						}
+						profKey := "profile:exemplars:" + tag
+						if ex, err := e.cache.MapGetAll(ctx, profKey); err == nil && len(ex) > 0 {
+							keySet[profKey] = admin.CacheKeyInfo{Key: profKey, Type: "map", Size: len(ex)}
+						}
+					}
+				}
+			}
+			histKey := "alert:history:" + circuitID
+			if alerts, err := e.cache.MapGetAll(ctx, histKey); err == nil && len(alerts) > 0 {
+				keySet[histKey] = admin.CacheKeyInfo{Key: histKey, Type: "map", Size: len(alerts)}
+			}
+			statsKey := "alert:stats:" + circuitID
+			if stats, err := e.cache.MapGetAll(ctx, statsKey); err == nil && len(stats) > 0 {
+				keySet[statsKey] = admin.CacheKeyInfo{Key: statsKey, Type: "map", Size: len(stats)}
+			}
+		}
+	}
+
+	// Subsystem: Global Alert Index
+	if alertCircuits, err := e.cache.SetMembers(ctx, "alert:circuits"); err == nil && len(alertCircuits) > 0 {
+		keySet["alert:circuits"] = admin.CacheKeyInfo{
+			Key:  "alert:circuits",
+			Type: "set",
+			Size: len(alertCircuits),
+		}
+		for _, cid := range alertCircuits {
+			histKey := "alert:history:" + cid
+			if _, exists := keySet[histKey]; !exists {
+				if alerts, err := e.cache.MapGetAll(ctx, histKey); err == nil && len(alerts) > 0 {
+					keySet[histKey] = admin.CacheKeyInfo{Key: histKey, Type: "map", Size: len(alerts)}
+				}
+			}
+		}
+	}
+
+	// Subsystem: Cluster Leader Membership
+	if nodes, err := e.cache.MapGetAll(ctx, "flux:leader:nodes"); err == nil && len(nodes) > 0 {
+		keySet["flux:leader:nodes"] = admin.CacheKeyInfo{
+			Key:  "flux:leader:nodes",
+			Type: "map",
+			Size: len(nodes),
+		}
+	}
+
+	// Filter by prefix, sort keys deterministically, and apply limit
+	var results []admin.CacheKeyInfo
+	for k, info := range keySet {
+		if prefix == "" || strings.HasPrefix(k, prefix) || strings.Contains(k, prefix) {
+			results = append(results, info)
+		}
+	}
+
+	sort.Slice(results, func(i, j int) bool {
+		return results[i].Key < results[j].Key
+	})
+
+	if len(results) > limit {
+		results = results[:limit]
+	}
+	return results, nil
+}
+
+// InspectCacheKey returns full key data and contents directly from CacheBackend
+// by dynamically inspecting the key using standard CacheBackend primitives.
+func (e *Engine) InspectCacheKey(ctx context.Context, key string) (*admin.CacheKeyDetail, error) {
+	if e.cache == nil {
+		return nil, errors.New("flux: cache backend not initialized")
+	}
+
+	// Dynamic Inspection via standard CacheBackend primitives
+	// Check Map
+	if mapVal, err := e.cache.MapGetAll(ctx, key); err == nil && len(mapVal) > 0 {
+		return &admin.CacheKeyDetail{
+			Key:   key,
+			Type:  "map",
+			Size:  len(mapVal),
+			Value: mapVal,
+		}, nil
+	}
+
+	// Check Set
+	if setMembers, err := e.cache.SetMembers(ctx, key); err == nil && len(setMembers) > 0 {
+		return &admin.CacheKeyDetail{
+			Key:   key,
+			Type:  "set",
+			Size:  len(setMembers),
+			Value: setMembers,
+		}, nil
+	}
+
+	// Check String
+	if strVal, err := e.cache.Get(ctx, key); err == nil && len(strVal) > 0 {
+		return &admin.CacheKeyDetail{
+			Key:   key,
+			Type:  "string",
+			Size:  len(strVal),
+			Value: strVal,
+		}, nil
+	}
+
+	return nil, cache.ErrKeyNotFound
+}
+

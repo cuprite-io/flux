@@ -30,6 +30,8 @@ type Client interface {
 	StreamAlerts(ctx context.Context) (<-chan AlertEvent, <-chan error, error)
 	SubmitFeedback(ctx context.Context, req FeedbackRequest) (*FeedbackResponse, error)
 	DryRunEval(ctx context.Context, req EvalRequest) (*EvalResponse, error)
+	GetCacheKeys(ctx context.Context, prefix string, limit int) ([]CacheKeyInfo, error)
+	InspectCacheKey(ctx context.Context, key string) (*CacheKeyDetail, error)
 	Close() error
 }
 
@@ -354,6 +356,29 @@ func (c *HTTPClient) DryRunEval(ctx context.Context, req EvalRequest) (*EvalResp
 	return &resp, nil
 }
 
+// GetCacheKeys retrieves matching cache keys from GET /api/v1/cache/keys.
+func (c *HTTPClient) GetCacheKeys(ctx context.Context, prefix string, limit int) ([]CacheKeyInfo, error) {
+	path := fmt.Sprintf("/api/v1/cache/keys?limit=%d", limit)
+	if prefix != "" {
+		path += "&prefix=" + url.QueryEscape(prefix)
+	}
+	var keys []CacheKeyInfo
+	if err := c.doJSON(ctx, http.MethodGet, path, nil, &keys); err != nil {
+		return nil, err
+	}
+	return keys, nil
+}
+
+// InspectCacheKey retrieves the detail and contents of a cache key from GET /api/v1/cache/item.
+func (c *HTTPClient) InspectCacheKey(ctx context.Context, key string) (*CacheKeyDetail, error) {
+	path := "/api/v1/cache/item?key=" + url.QueryEscape(key)
+	var detail CacheKeyDetail
+	if err := c.doJSON(ctx, http.MethodGet, path, nil, &detail); err != nil {
+		return nil, err
+	}
+	return &detail, nil
+}
+
 // Close gracefully terminates all active SSE streams.
 func (c *HTTPClient) Close() error {
 	c.closeMu.Lock()
@@ -627,6 +652,41 @@ func (l *LocalClient) DryRunEval(ctx context.Context, req EvalRequest) (*EvalRes
 		ShadowFirings:    res.ShadowFirings,
 		DurationMicro:    res.DurationMicro,
 		Errors:           res.Errors,
+	}, nil
+}
+
+// GetCacheKeys retrieves matching cache keys directly from the local engine.
+func (l *LocalClient) GetCacheKeys(ctx context.Context, prefix string, limit int) ([]CacheKeyInfo, error) {
+	keys, err := l.engine.ScanCacheKeys(ctx, prefix, limit)
+	if err != nil {
+		return nil, err
+	}
+	result := make([]CacheKeyInfo, len(keys))
+	for i, k := range keys {
+		result[i] = CacheKeyInfo{
+			Key:       k.Key,
+			Type:      k.Type,
+			Size:      k.Size,
+			TTL:       k.TTL,
+			ExpiresAt: k.ExpiresAt,
+		}
+	}
+	return result, nil
+}
+
+// InspectCacheKey retrieves key details and contents directly from the local engine.
+func (l *LocalClient) InspectCacheKey(ctx context.Context, key string) (*CacheKeyDetail, error) {
+	detail, err := l.engine.InspectCacheKey(ctx, key)
+	if err != nil {
+		return nil, err
+	}
+	return &CacheKeyDetail{
+		Key:       detail.Key,
+		Type:      detail.Type,
+		Size:      detail.Size,
+		TTL:       detail.TTL,
+		ExpiresAt: detail.ExpiresAt,
+		Value:     detail.Value,
 	}, nil
 }
 

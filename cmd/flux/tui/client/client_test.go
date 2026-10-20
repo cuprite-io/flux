@@ -2,6 +2,7 @@ package client_test
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sync"
 	"testing"
@@ -30,7 +31,7 @@ func newMockEngine() *mockEngine {
 	}
 }
 
-func (m *mockEngine) Version() string       { return "0.24.0" }
+func (m *mockEngine) Version() string       { return "0.25.0" }
 func (m *mockEngine) NodeID() string        { return "node-test-1" }
 func (m *mockEngine) LeaderID() string      { return "node-test-1" }
 func (m *mockEngine) IsLeader() bool        { return true }
@@ -115,6 +116,26 @@ func (m *mockEngine) fireAlert(evt admin.AlertEvent) {
 	}
 }
 
+func (m *mockEngine) ScanCacheKeys(ctx context.Context, prefix string, limit int) ([]admin.CacheKeyInfo, error) {
+	return []admin.CacheKeyInfo{
+		{Key: "alert:history:test", Type: "map", Size: 5},
+		{Key: "entity:customer:1", Type: "string", Size: 24},
+	}, nil
+}
+
+func (m *mockEngine) InspectCacheKey(ctx context.Context, key string) (*admin.CacheKeyDetail, error) {
+	if key == "entity:customer:1" {
+		return &admin.CacheKeyDetail{
+			Key:   key,
+			Type:  "string",
+			Size:  24,
+			Value: `{"tier":"gold"}`,
+		}, nil
+	}
+	return nil, errors.New("key not found")
+}
+
+
 func TestHTTPClient_FullLifecycle(t *testing.T) {
 	mockEng := newMockEngine()
 	c1 := types.NewCircuit("fraud_circuit")
@@ -159,7 +180,7 @@ func TestHTTPClient_FullLifecycle(t *testing.T) {
 	status, err := c.GetStatus(context.Background())
 	require.NoError(t, err)
 	assert.Equal(t, "flux-admin", status.Service)
-	assert.Equal(t, "0.24.0", status.Version)
+	assert.Equal(t, "0.25.0", status.Version)
 	assert.Equal(t, 2, status.ClusterNodes)
 	assert.True(t, status.IsLeader)
 
@@ -215,6 +236,17 @@ func TestHTTPClient_FullLifecycle(t *testing.T) {
 	require.NoError(t, err)
 	assert.True(t, evalResp.Passed)
 	assert.Equal(t, []string{"test-circuit"}, evalResp.ExecutedCircuits)
+
+	// GetCacheKeys
+	cacheKeys, err := c.GetCacheKeys(context.Background(), "", 10)
+	require.NoError(t, err)
+	assert.Len(t, cacheKeys, 2)
+
+	// InspectCacheKey
+	keyDetail, err := c.InspectCacheKey(context.Background(), "entity:customer:1")
+	require.NoError(t, err)
+	assert.Equal(t, "entity:customer:1", keyDetail.Key)
+	assert.Equal(t, "string", keyDetail.Type)
 
 	// StreamAlerts
 	streamCtx, cancelStream := context.WithTimeout(context.Background(), 2*time.Second)
@@ -316,4 +348,15 @@ func TestLocalClient_StandaloneMode(t *testing.T) {
 	})
 	require.NoError(t, err)
 	assert.Equal(t, "recorded", fbResp.Status)
+
+	// 7. GetCacheKeys & InspectCacheKey
+	cKeys, err := lc.GetCacheKeys(ctx, "", 20)
+	require.NoError(t, err)
+	assert.NotEmpty(t, cKeys)
+
+	insp, err := lc.InspectCacheKey(ctx, "registry:circuits")
+	require.NoError(t, err)
+	assert.Equal(t, "registry:circuits", insp.Key)
+	assert.Equal(t, "map", insp.Type)
 }
+

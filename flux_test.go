@@ -346,3 +346,89 @@ func BenchmarkFlux_Spark(b *testing.B) {
 		_, _ = eng.Spark(ctx, evt, "stream:bench")
 	}
 }
+
+func TestFlux_ScanCacheKeys_SubsystemAggregator(t *testing.T) {
+	mem := cache.NewMemoryCache()
+	eng, err := flux.New(flux.WithCache(mem))
+	if err != nil {
+		t.Fatalf("failed to create engine: %v", err)
+	}
+	defer eng.Close()
+
+	ctx := context.Background()
+
+	// Register a circuit
+	c := types.NewCircuit("order_validator").
+		WithTags("orders", "checkout").
+		WithRoot(types.NewNode("validate"))
+	if err := eng.Registry().Put(ctx, c); err != nil {
+		t.Fatalf("failed to put circuit: %v", err)
+	}
+
+	// Add an arbitrary schema string and profile map to verify aggregator discovery
+	_ = mem.Set(ctx, "schema:orders", `{"order_id":"string"}`, 0)
+	_, _ = mem.MapSet(ctx, "profile:exemplars:orders", "fp1", `{"order_id":"123"}`, 0)
+	_, _ = mem.SetAdd(ctx, "alert:circuits", "order_validator")
+	_, _ = mem.MapSet(ctx, "alert:history:order_validator", "alt-1", `{"alert":"fraud"}`, 0)
+	_, _ = mem.MapSet(ctx, "flux:leader:nodes", "node-1", `{"status":"active"}`, 0)
+
+	// Scan keys via Subsystem Aggregator
+	keys, err := eng.ScanCacheKeys(ctx, "", 100)
+	if err != nil {
+		t.Fatalf("expected ScanCacheKeys to succeed via aggregator, got: %v", err)
+	}
+
+	foundKeys := make(map[string]string)
+	for _, k := range keys {
+		foundKeys[k.Key] = k.Type
+	}
+
+	expected := []string{
+		"registry:circuits",
+		"registry:tag:orders",
+		"schema:orders",
+		"profile:exemplars:orders",
+		"alert:circuits",
+		"alert:history:order_validator",
+		"flux:leader:nodes",
+	}
+
+	for _, exp := range expected {
+		if _, ok := foundKeys[exp]; !ok {
+			t.Errorf("expected key %q to be discovered by subsystem aggregator, found keys: %v", exp, foundKeys)
+		}
+	}
+
+	// Test Dynamic Inspection: Map
+	detailMap, err := eng.InspectCacheKey(ctx, "registry:circuits")
+	if err != nil {
+		t.Fatalf("failed to inspect map key: %v", err)
+	}
+	if detailMap.Type != "map" {
+		t.Errorf("expected type 'map', got %q", detailMap.Type)
+	}
+
+	// Test Dynamic Inspection: Set
+	detailSet, err := eng.InspectCacheKey(ctx, "alert:circuits")
+	if err != nil {
+		t.Fatalf("failed to inspect set key: %v", err)
+	}
+	if detailSet.Type != "set" {
+		t.Errorf("expected type 'set', got %q", detailSet.Type)
+	}
+
+	// Test Dynamic Inspection: String
+	detailStr, err := eng.InspectCacheKey(ctx, "schema:orders")
+	if err != nil {
+		t.Fatalf("failed to inspect string key: %v", err)
+	}
+	if detailStr.Type != "string" {
+		t.Errorf("expected type 'string', got %q", detailStr.Type)
+	}
+
+	// Test Dynamic Inspection: Non-existent key
+	_, err = eng.InspectCacheKey(ctx, "non:existent:key")
+	if err != cache.ErrKeyNotFound {
+		t.Errorf("expected ErrKeyNotFound, got %v", err)
+	}
+}

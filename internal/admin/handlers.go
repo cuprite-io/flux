@@ -22,6 +22,8 @@ func (s *Server) registerRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/v1/alerts/stream", s.handleAlertStream)
 	mux.HandleFunc("/api/v1/feedback", s.handleFeedback)
 	mux.HandleFunc("/api/v1/eval", s.handleEval)
+	mux.HandleFunc("/api/v1/cache/keys", s.handleCacheKeys)
+	mux.HandleFunc("/api/v1/cache/item", s.handleCacheItem)
 }
 
 // authMiddleware enforces optional Bearer token authentication and decorates headers.
@@ -348,3 +350,54 @@ func countNodes(n *types.Node) int {
 	}
 	return total
 }
+
+// handleCacheKeys handles GET /api/v1/cache/keys?prefix=<prefix>&limit=<limit>.
+func (s *Server) handleCacheKeys(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		s.writeJSONError(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+
+	prefix := r.URL.Query().Get("prefix")
+	limit := 1000
+	if lStr := r.URL.Query().Get("limit"); lStr != "" {
+		if l, err := strconv.Atoi(lStr); err == nil && l > 0 {
+			limit = l
+		}
+	}
+
+	keys, err := s.engine.ScanCacheKeys(r.Context(), prefix, limit)
+	if err != nil {
+		s.writeJSONError(w, http.StatusInternalServerError, fmt.Sprintf("failed to scan cache keys: %v", err))
+		return
+	}
+
+	if keys == nil {
+		keys = []CacheKeyInfo{}
+	}
+
+	s.writeJSON(w, http.StatusOK, keys)
+}
+
+// handleCacheItem handles GET /api/v1/cache/item?key=<key>.
+func (s *Server) handleCacheItem(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		s.writeJSONError(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+
+	key := r.URL.Query().Get("key")
+	if key == "" {
+		s.writeJSONError(w, http.StatusBadRequest, "query param 'key' is required")
+		return
+	}
+
+	item, err := s.engine.InspectCacheKey(r.Context(), key)
+	if err != nil {
+		s.writeJSONError(w, http.StatusNotFound, fmt.Sprintf("key %q not found: %v", key, err))
+		return
+	}
+
+	s.writeJSON(w, http.StatusOK, item)
+}
+

@@ -7,6 +7,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.25.0] - 2026-10-19
+
+### Added
+
+- **Distributed Cache Namespace & Key Explorer (`:cache`)** (`cmd/flux/tui/views/cache`, `cmd/flux/tui/client`, `internal/admin`, `internal/cache`, `cmd/flux/tui/model.go`):
+  - **Hierarchical Namespace Tree & Key Table**:
+    - Implemented interactive `:cache` view (accessible via `:cache`, `:state`, or tab `3` in Cluster Mode) browsing keys across namespaces (`alert:history:*`, `schema:*`, `entity:*`, `flux:window:*`, `flux:leader:*`, `registry:*`).
+    - Implemented hierarchical ASCII/Unicode tree builder (`tree.go`) grouping colon-delimited namespace segments with child key counters and badges.
+    - Implemented interactive keys table with live type badges (`STRING`, `MAP`, `SET`, `WINDOW`), size indicators, and human-readable TTL countdowns.
+  - **Interactive Split-Screen Inspector (`inspector.go`)**:
+    - Syntax-highlighted JSON viewer (`HighlightJSON`) with colorized keys, strings, numbers, booleans, and nulls.
+    - Specialized visualizers: key-value table for partitioned maps, bulleted list for distributed sets, and rate displays for sliding window counters.
+    - Dynamic TTL rendering (`formatTTL`) and raw string view toggle (`v`).
+  - **Search, Filtering, and Keyboard Navigation**:
+    - Real-time fuzzy substring and prefix filtering (`/`) with match counter and `Esc` clear.
+    - Split-screen focus switching (`Tab`) between keys table and detail inspector.
+    - Automatic detail inspection on cursor movement (`↑`/`↓`/`k`/`j`) and manual inspection (`Enter`).
+    - Scrollable inspector viewport (`↑`/`↓`/`PgUp`/`PgDown`/`u`/`ctrl+d`).
+  - **Stateless Admin API & Engine Client Bridge**:
+    - Added `GET /api/v1/cache/keys` and `GET /api/v1/cache/item` to `internal/admin`.
+    - Implemented Subsystem Aggregator on `*flux.Engine` for zero-pollution namespace exploration and dynamic inspection via standard `CacheBackend` primitives.
+    - Extended `Client` bridge with `GetCacheKeys` and `InspectCacheKey` on `HTTPClient` and `LocalClient`.
+  - Added unit and integration test coverage across `cmd/flux/tui/views/cache/view_test.go`, `cmd/flux/tui/app_test.go`, `cmd/flux/tui/client/client_test.go`, `internal/admin/admin_test.go`, and `flux_test.go`.
+
+---
+
 ## [0.24.0] - 2026-10-19
 
 ### Added

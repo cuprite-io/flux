@@ -16,6 +16,7 @@ import (
 	"github.com/charmbracelet/lipgloss"
 	"github.com/cuprite-io/flux"
 	"github.com/cuprite-io/flux/cmd/flux/tui/client"
+	cacheview "github.com/cuprite-io/flux/cmd/flux/tui/views/cache"
 	"github.com/cuprite-io/flux/cmd/flux/tui/views/circuits"
 )
 
@@ -26,6 +27,7 @@ type TickMsg time.Time
 type Model struct {
 	client       client.Client
 	circuitsView circuits.Model
+	cacheView    cacheview.Model
 	keys         KeyMap
 	currentView  ViewID
 	previousView ViewID
@@ -94,6 +96,7 @@ func NewModel(cfg Config) Model {
 	return Model{
 		client:       cli,
 		circuitsView: circuits.New(cli),
+		cacheView:    cacheview.New(cli),
 		keys:         DefaultKeyMap(),
 		currentView:  ViewCircuits,
 		previousView: ViewCircuits,
@@ -119,6 +122,11 @@ func (m Model) CircuitsView() circuits.Model {
 	return m.circuitsView
 }
 
+// CacheView returns the Cache view component.
+func (m Model) CacheView() cacheview.Model {
+	return m.cacheView
+}
+
 // SetDimensions updates the window size.
 func (m *Model) SetDimensions(w, h int) {
 	m.width = w
@@ -129,6 +137,7 @@ func (m *Model) SetDimensions(w, h int) {
 		contentHeight = 6
 	}
 	m.circuitsView.SetDimensions(w-4, contentHeight-2)
+	m.cacheView.SetDimensions(w-4, contentHeight-2)
 }
 
 // CurrentView returns the currently active view ID.
@@ -190,6 +199,7 @@ func (m Model) Init() tea.Cmd {
 		TickCmd(),
 		m.WindowTitleCmd(),
 		m.circuitsView.Init(),
+		m.cacheView.Init(),
 	)
 }
 
@@ -215,6 +225,16 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.SetView(ViewEval)
 		m.SetStatus(fmt.Sprintf("Transferred circuit %q to Dry-Run Playground.", msg.CircuitID), false)
 		return m, nil
+
+	case cacheview.CacheKeysLoadedMsg:
+		var cmd tea.Cmd
+		m.cacheView, cmd = m.cacheView.Update(msg)
+		return m, cmd
+
+	case cacheview.CacheKeyDetailLoadedMsg:
+		var cmd tea.Cmd
+		m.cacheView, cmd = m.cacheView.Update(msg)
+		return m, cmd
 
 	case TickMsg:
 		m.currentTime = time.Time(msg)
@@ -272,6 +292,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 						}
 						m.client = cli
 						cmds = append(cmds, m.circuitsView.SetClient(m.client))
+						cmds = append(cmds, m.cacheView.SetClient(m.client))
 					}
 					m.SetStatus(fmt.Sprintf("Connected to %s (Cluster Mode)", probeRes.URL), false)
 					cmds = append(cmds, m.WindowTitleCmd())
@@ -295,6 +316,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					}
 					m.client, _ = client.NewLocalClient()
 					cmds = append(cmds, m.circuitsView.SetClient(m.client))
+					cmds = append(cmds, m.cacheView.SetClient(m.client))
 					m.SetView(ViewCircuits)
 					m.SetStatus("Disconnected. Switched to Standalone Mode", false)
 					cmds = append(cmds, m.WindowTitleCmd())
@@ -374,6 +396,40 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if key.Matches(msg, m.keys.Escape) {
 				var cmd tea.Cmd
 				m.circuitsView, cmd = m.circuitsView.Update(msg)
+				return m, cmd
+			}
+		}
+
+		if m.currentView == ViewCache {
+			if m.cacheView.IsFiltering() {
+				var cmd tea.Cmd
+				m.cacheView, cmd = m.cacheView.Update(msg)
+				return m, cmd
+			}
+			if key.Matches(msg, m.keys.Command) {
+				m.commandMode = true
+				m.commandInput.Focus()
+				return m, textinput.Blink
+			}
+			switch msg.String() {
+			case "/", "v", "r", "tab":
+				var cmd tea.Cmd
+				m.cacheView, cmd = m.cacheView.Update(msg)
+				if status := m.cacheView.StatusMsg(); status != "" {
+					m.SetStatus(status, false)
+				}
+				return m, cmd
+			}
+			if key.Matches(msg, m.keys.Enter) || key.Matches(msg, m.keys.Escape) ||
+				key.Matches(msg, m.keys.Up) || key.Matches(msg, m.keys.Down) ||
+				msg.String() == "k" || msg.String() == "j" ||
+				msg.String() == "pgup" || msg.String() == "pgdown" ||
+				msg.String() == "u" || msg.String() == "ctrl+d" {
+				var cmd tea.Cmd
+				m.cacheView, cmd = m.cacheView.Update(msg)
+				if status := m.cacheView.StatusMsg(); status != "" {
+					m.SetStatus(status, false)
+				}
 				return m, cmd
 			}
 		}
@@ -581,6 +637,15 @@ func (m Model) renderFooter() string {
 			StyleKey.Render("Tab") + StyleKeyHelp.Render(" switch panel, ") +
 			StyleKey.Render("↑/↓/j/k") + StyleKeyHelp.Render(" scroll, ") +
 			StyleKey.Render(":") + StyleKeyHelp.Render(" commands")
+	} else if m.currentView == ViewCache && m.cacheView.IsFiltering() {
+		left = StyleStatusMsg.Render("Filter mode active. Type search query, Enter to accept, Esc to cancel.")
+	} else if m.currentView == ViewCache {
+		left = StyleKeyHelp.Render("Press ") + StyleKey.Render("Tab") + StyleKeyHelp.Render(" switch panel, ") +
+			StyleKey.Render("Enter") + StyleKeyHelp.Render(" inspect, ") +
+			StyleKey.Render("v") + StyleKeyHelp.Render(" raw/formatted, ") +
+			StyleKey.Render("/") + StyleKeyHelp.Render(" filter, ") +
+			StyleKey.Render("r") + StyleKeyHelp.Render(" refresh, ") +
+			StyleKey.Render(":") + StyleKeyHelp.Render(" commands")
 	} else {
 		left = StyleKeyHelp.Render("Press ") + StyleKey.Render(":") + StyleKeyHelp.Render(" for commands, ") +
 			StyleKey.Render("Tab") + StyleKeyHelp.Render(" switch view, ") +
@@ -621,15 +686,7 @@ func (m Model) renderContent(height int) string {
 		))
 
 	case ViewCache:
-		return panelStyle.Render(m.placeholderPanel(
-			"💾 Distributed Cache & State Browser (:cache)",
-			fmt.Sprintf("Connected endpoint: %s", m.endpoint),
-			[]string{
-				"• Namespaces: alert:history:*, schema:*, entity:*, flux:window:*, flux:leader:*",
-				"• Press 's' to opt into local snapshot sync for offline sub-millisecond search.",
-				"• Press Enter on any key to inspect formatted JSON values and hash fields.",
-			},
-		))
+		return StyleViewport.Render(m.cacheView.View())
 
 	case ViewEval:
 		return panelStyle.Render(m.placeholderPanel(

@@ -22,7 +22,7 @@ type mockClient struct {
 }
 
 func (m *mockClient) GetStatus(ctx context.Context) (*client.StatusResponse, error) {
-	return &client.StatusResponse{Service: "flux-admin", Version: "0.24.0"}, nil
+	return &client.StatusResponse{Service: "flux-admin", Version: "0.25.0"}, nil
 }
 
 func (m *mockClient) GetCircuits(ctx context.Context) ([]client.CircuitSummary, error) {
@@ -82,6 +82,14 @@ func (m *mockClient) SubmitFeedback(ctx context.Context, req client.FeedbackRequ
 }
 
 func (m *mockClient) DryRunEval(ctx context.Context, req client.EvalRequest) (*client.EvalResponse, error) {
+	return nil, nil
+}
+
+func (m *mockClient) GetCacheKeys(ctx context.Context, prefix string, limit int) ([]client.CacheKeyInfo, error) {
+	return nil, nil
+}
+
+func (m *mockClient) InspectCacheKey(ctx context.Context, key string) (*client.CacheKeyDetail, error) {
 	return nil, nil
 }
 

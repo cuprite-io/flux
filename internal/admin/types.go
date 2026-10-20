@@ -117,6 +117,25 @@ type AlertEvent struct {
 	Timestamp time.Time      `json:"timestamp"`
 }
 
+// CacheKeyInfo is the metadata returned for keys in GET /api/v1/cache/keys.
+type CacheKeyInfo struct {
+	Key       string        `json:"key"`
+	Type      string        `json:"type"` // "string", "map", "set", "window"
+	Size      int           `json:"size"`
+	TTL       time.Duration `json:"ttl"`
+	ExpiresAt time.Time     `json:"expires_at,omitempty"`
+}
+
+// CacheKeyDetail is the complete inspection data returned by GET /api/v1/cache/item.
+type CacheKeyDetail struct {
+	Key       string        `json:"key"`
+	Type      string        `json:"type"`
+	Size      int           `json:"size"`
+	TTL       time.Duration `json:"ttl"`
+	ExpiresAt time.Time     `json:"expires_at,omitempty"`
+	Value     any           `json:"value"`
+}
+
 // EngineContext defines the capabilities required from the Engine by the Admin server.
 // Flux Engine implements this interface, maintaining zero duplicate in-memory state.
 type EngineContext interface {
@@ -133,4 +152,6 @@ type EngineContext interface {
 	GetAutopilotSessions(ctx context.Context) []AutopilotSessionInfo
 	DryRunEval(ctx context.Context, req EvalRequest) (*EvalResponse, error)
 	RegisterAlertObserver(obs func(evt AlertEvent)) func()
+	ScanCacheKeys(ctx context.Context, prefix string, limit int) ([]CacheKeyInfo, error)
+	InspectCacheKey(ctx context.Context, key string) (*CacheKeyDetail, error)
 }
