@@ -9,6 +9,7 @@ import (
 	"reflect"
 	"slices"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -1182,4 +1183,134 @@ func (e *Engine) InspectCacheKey(ctx context.Context, key string) (*admin.CacheK
 
 	return nil, cache.ErrKeyNotFound
 }
+
+// GetClusterTopology discovers cluster topology and node heartbeats from the cluster membership map.
+func (e *Engine) GetClusterTopology(ctx context.Context) (*admin.ClusterTopologyResponse, error) {
+	selfID := e.NodeID()
+	leaderID := e.LeaderID()
+
+	// If no cache, return standalone
+	if e.cache == nil {
+		return &admin.ClusterTopologyResponse{
+			LeaderID:     selfID,
+			SelfNodeID:   selfID,
+			TotalNodes:   1,
+			HealthyNodes: 1,
+			Nodes: []admin.ClusterNode{
+				{
+					NodeID:       selfID,
+					IsLeader:     true,
+					Status:       "HEALTHY",
+					UpdatedAt:    time.Now().UTC(),
+					Uptime:       "standalone",
+					LeaseRemain:  10 * time.Second,
+				},
+			},
+		}, nil
+	}
+
+	// Read heartbeats from "flux:cluster:nodes"
+	entries, err := e.cache.MapGetAll(ctx, "flux:cluster:nodes")
+	if err != nil || len(entries) == 0 {
+		active := e.ActiveNodes()
+		if len(active) == 0 {
+			active = []string{selfID}
+		}
+		var nodes []admin.ClusterNode
+		for _, id := range active {
+			nodes = append(nodes, admin.ClusterNode{
+				NodeID:       id,
+				IsLeader:     id == leaderID,
+				Status:       "HEALTHY",
+				UpdatedAt:    time.Now().UTC(),
+				LeaseRemain:  10 * time.Second,
+			})
+		}
+		return &admin.ClusterTopologyResponse{
+			LeaderID:     leaderID,
+			SelfNodeID:   selfID,
+			TotalNodes:   len(nodes),
+			HealthyNodes: len(nodes),
+			Nodes:        nodes,
+		}, nil
+	}
+
+	now := time.Now().UTC()
+	heartbeatTTL := 10 * time.Second
+	cutoff := now.Add(-heartbeatTTL)
+	warningCutoff := now.Add(-heartbeatTTL / 2) // 5s
+
+	var nodes []admin.ClusterNode
+	healthyCount := 0
+
+	for id, raw := range entries {
+		var hb cluster.NodeHeartbeat
+		_ = json.Unmarshal([]byte(raw), &hb)
+		if hb.NodeID == "" {
+			hb.NodeID = id
+		}
+		if hb.UpdatedAt.IsZero() {
+			hb.UpdatedAt = now
+		}
+
+		age := now.Sub(hb.UpdatedAt)
+		if age < 0 {
+			age = 0
+		}
+		remain := heartbeatTTL - age
+		if remain < 0 {
+			remain = 0
+		}
+
+		status := "HEALTHY"
+		if hb.UpdatedAt.Before(cutoff) {
+			status = "EXPIRED"
+		} else if hb.UpdatedAt.Before(warningCutoff) {
+			status = "WARNING"
+		} else {
+			healthyCount++
+		}
+
+		addr := ""
+		streamPort := 0
+		uptime := ""
+		if hb.Metadata != nil {
+			addr = hb.Metadata["addr"]
+			if p, err := strconv.Atoi(hb.Metadata["stream_port"]); err == nil {
+				streamPort = p
+			}
+			uptime = hb.Metadata["uptime"]
+		}
+
+		nodes = append(nodes, admin.ClusterNode{
+			NodeID:       id,
+			Addr:         addr,
+			StreamPort:   streamPort,
+			IsLeader:     id == leaderID,
+			Status:       status,
+			HeartbeatAge: age,
+			LeaseRemain:  remain,
+			UpdatedAt:    hb.UpdatedAt,
+			Uptime:       uptime,
+			Metadata:     hb.Metadata,
+		})
+	}
+
+	// Sort nodes: leader first, then lexicographically by NodeID
+	sort.Slice(nodes, func(i, j int) bool {
+		if nodes[i].IsLeader != nodes[j].IsLeader {
+			return nodes[i].IsLeader
+		}
+		return nodes[i].NodeID < nodes[j].NodeID
+	})
+
+	return &admin.ClusterTopologyResponse{
+		LeaderID:     leaderID,
+		SelfNodeID:   selfID,
+		TotalNodes:   len(nodes),
+		HealthyNodes: healthyCount,
+		Nodes:        nodes,
+	}, nil
+}
+
 

@@ -158,6 +158,12 @@ func FetchSnapshotCmd(cli client.Client, store *SnapshotStore, cfg Config) tea.C
 		autopilot, _ := cli.GetAutopilot(ctx)
 		totalBytes += EstimateObjectSize(autopilot)
 
+		// 6b. Fetch Cluster Topology
+		if topo, err := cli.GetClusterTopology(ctx); err == nil && topo != nil {
+			store.SetTopology(topo)
+			totalBytes += EstimateObjectSize(topo)
+		}
+
 		// 7. Atomically populate store
 		store.SetData(status, circuits, keys, details, alerts, autopilot, totalBytes)
 

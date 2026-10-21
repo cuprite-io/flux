@@ -156,6 +156,32 @@ func (m *mockEngine) InspectCacheKey(ctx context.Context, key string) (*admin.Ca
 	return nil, errors.New("key not found")
 }
 
+func (m *mockEngine) GetClusterTopology(ctx context.Context) (*admin.ClusterTopologyResponse, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	var nodes []admin.ClusterNode
+	for _, id := range m.activeNodes {
+		nodes = append(nodes, admin.ClusterNode{
+			NodeID:       id,
+			Addr:         "127.0.0.1:9090",
+			StreamPort:   8080,
+			IsLeader:     id == m.leaderID,
+			Status:       "HEALTHY",
+			HeartbeatAge: 500 * time.Millisecond,
+			LeaseRemain:  9500 * time.Millisecond,
+			UpdatedAt:    time.Now().UTC(),
+			Uptime:       "1h30m",
+		})
+	}
+	return &admin.ClusterTopologyResponse{
+		LeaderID:     m.leaderID,
+		SelfNodeID:   m.nodeID,
+		TotalNodes:   len(nodes),
+		HealthyNodes: len(nodes),
+		Nodes:        nodes,
+	}, nil
+}
+
 func (m *mockEngine) fireAlert(evt admin.AlertEvent) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -435,4 +461,29 @@ func TestAdminServer_CacheEndpoints(t *testing.T) {
 	require.NoError(t, err)
 	defer resp5.Body.Close()
 	assert.Equal(t, http.StatusNotFound, resp5.StatusCode)
+}
+
+func TestAdminServer_ClusterTopology(t *testing.T) {
+	mockEng := newMockEngine()
+	srv, err := admin.NewServer(mockEng, admin.Config{Addr: "127.0.0.1:0"})
+	require.NoError(t, err)
+	require.NoError(t, srv.Start())
+	defer func() { _ = srv.Stop(context.Background()) }()
+
+	resp, err := http.Get(srv.URL() + "/api/v1/cluster/nodes")
+	require.NoError(t, err)
+	defer resp.Body.Close()
+	assert.Equal(t, http.StatusOK, resp.StatusCode)
+
+	var topo admin.ClusterTopologyResponse
+	err = json.NewDecoder(resp.Body).Decode(&topo)
+	require.NoError(t, err)
+	assert.Equal(t, "node-1", topo.LeaderID)
+	assert.Equal(t, "node-1", topo.SelfNodeID)
+	assert.Equal(t, 2, topo.TotalNodes)
+	assert.Equal(t, 2, topo.HealthyNodes)
+	require.Len(t, topo.Nodes, 2)
+	assert.Equal(t, "node-1", topo.Nodes[0].NodeID)
+	assert.True(t, topo.Nodes[0].IsLeader)
+	assert.Equal(t, "HEALTHY", topo.Nodes[0].Status)
 }

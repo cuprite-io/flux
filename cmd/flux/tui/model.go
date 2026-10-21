@@ -19,6 +19,7 @@ import (
 	tuisync "github.com/cuprite-io/flux/cmd/flux/tui/sync"
 	cacheview "github.com/cuprite-io/flux/cmd/flux/tui/views/cache"
 	"github.com/cuprite-io/flux/cmd/flux/tui/views/circuits"
+	clusterview "github.com/cuprite-io/flux/cmd/flux/tui/views/cluster"
 )
 
 // TickMsg triggers regular background UI refresh.
@@ -29,6 +30,7 @@ type Model struct {
 	client       client.Client
 	circuitsView circuits.Model
 	cacheView    cacheview.Model
+	clusterView  clusterview.Model
 	keys         KeyMap
 	currentView  ViewID
 	previousView ViewID
@@ -102,6 +104,7 @@ func NewModel(cfg Config) Model {
 		client:       cli,
 		circuitsView: circuits.New(cli),
 		cacheView:    cacheview.New(cli),
+		clusterView:  clusterview.New(cli),
 		keys:         DefaultKeyMap(),
 		currentView:  ViewCircuits,
 		previousView: ViewCircuits,
@@ -131,6 +134,11 @@ func (m Model) CircuitsView() circuits.Model {
 // CacheView returns the Cache view component.
 func (m Model) CacheView() cacheview.Model {
 	return m.cacheView
+}
+
+// ClusterView returns the Cluster Topology & Leader Election Inspector view component.
+func (m Model) ClusterView() clusterview.Model {
+	return m.clusterView
 }
 
 // Syncer returns the local snapshot synchronization engine.
@@ -165,6 +173,7 @@ func (m *Model) SetDimensions(w, h int) {
 	}
 	m.circuitsView.SetDimensions(w-4, contentHeight-2)
 	m.cacheView.SetDimensions(w-4, contentHeight-2)
+	m.clusterView.SetDimensions(w-4, contentHeight-2)
 }
 
 // CurrentView returns the currently active view ID.
@@ -227,6 +236,7 @@ func (m Model) Init() tea.Cmd {
 		m.WindowTitleCmd(),
 		m.circuitsView.Init(),
 		m.cacheView.Init(),
+		m.clusterView.Init(),
 	)
 }
 
@@ -263,6 +273,17 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.cacheView, cmd = m.cacheView.Update(msg)
 		return m, cmd
 
+	case clusterview.TopologyLoadedMsg:
+		var cmd tea.Cmd
+		m.clusterView, cmd = m.clusterView.Update(msg)
+		if m.clusterView.Leader() != nil {
+			m.leaderID = m.clusterView.Leader().NodeID
+		}
+		if len(m.clusterView.Nodes()) > 0 {
+			m.nodeCount = len(m.clusterView.Nodes())
+		}
+		return m, cmd
+
 	case tuisync.SyncStartedMsg:
 		return m, nil
 
@@ -283,6 +304,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if m.syncer != nil {
 				cmds = append(cmds, m.circuitsView.SetClient(m.syncer.Client(m.client)))
 				cmds = append(cmds, m.cacheView.SetClient(m.syncer.Client(m.client)))
+				cmds = append(cmds, m.clusterView.SetClient(m.syncer.Client(m.client)))
 			}
 		}
 		return m, tea.Batch(cmds...)
@@ -293,6 +315,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.SetStatus("Local snapshot cache cleared.", false)
 		cmds = append(cmds, m.circuitsView.SetClient(m.client))
 		cmds = append(cmds, m.cacheView.SetClient(m.client))
+		cmds = append(cmds, m.clusterView.SetClient(m.client))
 		return m, tea.Batch(cmds...)
 
 	case TickMsg:
@@ -352,6 +375,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 						m.client = cli
 						cmds = append(cmds, m.circuitsView.SetClient(m.client))
 						cmds = append(cmds, m.cacheView.SetClient(m.client))
+						cmds = append(cmds, m.clusterView.SetClient(m.client))
 					}
 					m.SetStatus(fmt.Sprintf("Connected to %s (Cluster Mode)", probeRes.URL), false)
 					cmds = append(cmds, m.WindowTitleCmd())
@@ -376,6 +400,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					m.client, _ = client.NewLocalClient()
 					cmds = append(cmds, m.circuitsView.SetClient(m.client))
 					cmds = append(cmds, m.cacheView.SetClient(m.client))
+					cmds = append(cmds, m.clusterView.SetClient(m.client))
 					if m.syncer != nil {
 						cmds = append(cmds, m.syncer.SetEnabled(false, nil))
 					}
@@ -429,7 +454,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				} else if strings.TrimSpace(raw) == "q" || strings.TrimSpace(raw) == "quit" {
 					return m, tea.Quit
 				} else if raw != "" {
-					m.SetStatus(fmt.Sprintf("Unknown command: %q (try :circuits, :eval, :autopilot, :alerts, :connect <addr>, :disconnect, :sync)", raw), true)
+					m.SetStatus(fmt.Sprintf("Unknown command: %q (try :circuits, :eval, :autopilot, :alerts, :cluster, :connect <addr>, :disconnect, :sync)", raw), true)
 				}
 				return m, nil
 
@@ -528,6 +553,40 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				var cmd tea.Cmd
 				m.cacheView, cmd = m.cacheView.Update(msg)
 				if status := m.cacheView.StatusMsg(); status != "" {
+					m.SetStatus(status, false)
+				}
+				return m, cmd
+			}
+		}
+
+		if m.currentView == ViewCluster {
+			if m.clusterView.IsFiltering() {
+				var cmd tea.Cmd
+				m.clusterView, cmd = m.clusterView.Update(msg)
+				return m, cmd
+			}
+			if key.Matches(msg, m.keys.Command) {
+				m.commandMode = true
+				m.commandInput.Focus()
+				return m, textinput.Blink
+			}
+			switch msg.String() {
+			case "/", "v", "r", "tab":
+				var cmd tea.Cmd
+				m.clusterView, cmd = m.clusterView.Update(msg)
+				if status := m.clusterView.StatusMsg(); status != "" {
+					m.SetStatus(status, false)
+				}
+				return m, cmd
+			}
+			if key.Matches(msg, m.keys.Enter) || key.Matches(msg, m.keys.Escape) ||
+				key.Matches(msg, m.keys.Up) || key.Matches(msg, m.keys.Down) ||
+				msg.String() == "k" || msg.String() == "j" ||
+				msg.String() == "pgup" || msg.String() == "pgdown" ||
+				msg.String() == "u" || msg.String() == "ctrl+d" {
+				var cmd tea.Cmd
+				m.clusterView, cmd = m.clusterView.Update(msg)
+				if status := m.clusterView.StatusMsg(); status != "" {
 					m.SetStatus(status, false)
 				}
 				return m, cmd
@@ -766,6 +825,14 @@ func (m Model) renderFooter() string {
 			StyleKey.Render("/") + StyleKeyHelp.Render(" filter, ") +
 			StyleKey.Render("r") + StyleKeyHelp.Render(" refresh, ") +
 			StyleKey.Render(":") + StyleKeyHelp.Render(" commands")
+	} else if m.currentView == ViewCluster && m.clusterView.IsFiltering() {
+		left = StyleStatusMsg.Render("Filter mode active. Type node ID/role/status search query, Enter to accept, Esc to cancel.")
+	} else if m.currentView == ViewCluster {
+		left = StyleKeyHelp.Render("Press ") + StyleKey.Render("Tab") + StyleKeyHelp.Render(" switch panel, ") +
+			StyleKey.Render("v") + StyleKeyHelp.Render(" metadata/failover log, ") +
+			StyleKey.Render("/") + StyleKeyHelp.Render(" filter, ") +
+			StyleKey.Render("r") + StyleKeyHelp.Render(" refresh, ") +
+			StyleKey.Render(":") + StyleKeyHelp.Render(" commands")
 	} else {
 		left = StyleKeyHelp.Render("Press ") + StyleKey.Render(":") + StyleKeyHelp.Render(" for commands, ") +
 			StyleKey.Render("Tab") + StyleKeyHelp.Render(" switch view, ") +
@@ -831,15 +898,7 @@ func (m Model) renderContent(height int) string {
 		))
 
 	case ViewCluster:
-		return panelStyle.Render(m.placeholderPanel(
-			"🌐 Cluster Topology & Leader Election (:cluster)",
-			fmt.Sprintf("Active nodes: %d | Current Leader: %s", m.nodeCount, m.leaderID),
-			[]string{
-				"• Real-time node membership heartbeat table and lease expiration countdowns.",
-				"• Conflict-free leader election visualization based on lexicographical node ID.",
-				"• Failover logs and heartbeat health monitors.",
-			},
-		))
+		return StyleViewport.Render(m.clusterView.View())
 
 	case ViewHelp:
 		return panelStyle.Render(m.renderHelpView())
@@ -876,7 +935,7 @@ func (m Model) renderHelpView() string {
 		{"Tab", "Switch to next view"},
 		{"Shift+Tab", "Switch to previous view"},
 		{"1 .. 6", "Directly jump to view by index"},
-		{":<command>", "Vim-style command launcher (:circuits, :eval, :autopilot, :alerts, :connect, :disconnect)"},
+		{":<command>", "Vim-style command launcher (:circuits, :cache, :eval, :autopilot, :alerts, :cluster, :connect, :disconnect)"},
 		{"?", "Toggle this help view"},
 		{"q / Ctrl+C", "Quit Flux shell"},
 		{"", ""},

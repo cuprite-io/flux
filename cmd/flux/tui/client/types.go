@@ -140,3 +140,27 @@ type CacheKeyDetail struct {
 	Value     any           `json:"value"`
 }
 
+// ClusterNode represents metadata for an active node in the distributed cluster.
+type ClusterNode struct {
+	NodeID       string            `json:"node_id"`
+	Addr         string            `json:"addr,omitempty"`
+	StreamPort   int               `json:"stream_port,omitempty"`
+	IsLeader     bool              `json:"is_leader"`
+	Status       string            `json:"status"` // "HEALTHY", "WARNING", "EXPIRED"
+	HeartbeatAge time.Duration     `json:"heartbeat_age"`
+	LeaseRemain  time.Duration     `json:"lease_remain"`
+	UpdatedAt    time.Time         `json:"updated_at"`
+	Uptime       string            `json:"uptime,omitempty"`
+	Metadata     map[string]string `json:"metadata,omitempty"`
+}
+
+// ClusterTopology contains full cluster topology and leader election state.
+type ClusterTopology struct {
+	LeaderID     string        `json:"leader_id"`
+	SelfNodeID   string        `json:"self_node_id"`
+	TotalNodes   int           `json:"total_nodes"`
+	HealthyNodes int           `json:"healthy_nodes"`
+	Nodes        []ClusterNode `json:"nodes"`
+}
+
+

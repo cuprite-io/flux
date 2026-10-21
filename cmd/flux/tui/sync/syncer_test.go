@@ -86,6 +86,15 @@ func (m *mockSyncClient) InspectCacheKey(ctx context.Context, key string) (*clie
 	return nil, errors.New("key not found")
 }
 
+func (m *mockSyncClient) GetClusterTopology(ctx context.Context) (*client.ClusterTopology, error) {
+	return &client.ClusterTopology{
+		LeaderID:     "node-1",
+		SelfNodeID:   "node-1",
+		TotalNodes:   3,
+		HealthyNodes: 3,
+	}, nil
+}
+
 func (m *mockSyncClient) Close() error {
 	return nil
 }

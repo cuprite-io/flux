@@ -49,6 +49,7 @@ type SnapshotStore struct {
 	details     map[string]*client.CacheKeyDetail
 	alerts      map[string][]client.AlertRecord
 	autopilot   []client.AutopilotSession
+	topology    *client.ClusterTopology
 	lastSync    time.Time
 	totalBytes  int64
 	synced      bool
@@ -112,6 +113,7 @@ func (s *SnapshotStore) Clear() {
 	s.details = make(map[string]*client.CacheKeyDetail)
 	s.alerts = make(map[string][]client.AlertRecord)
 	s.autopilot = nil
+	s.topology = nil
 	s.totalBytes = 0
 	s.lastSync = time.Time{}
 	s.synced = false
@@ -209,6 +211,27 @@ func (s *SnapshotStore) Autopilot() []client.AutopilotSession {
 	result := make([]client.AutopilotSession, len(s.autopilot))
 	copy(result, s.autopilot)
 	return result
+}
+
+// SetTopology caches the cluster topology in the snapshot store.
+func (s *SnapshotStore) SetTopology(topo *client.ClusterTopology) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.topology = topo
+}
+
+// Topology returns cached cluster topology.
+func (s *SnapshotStore) Topology() *client.ClusterTopology {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	if s.topology == nil {
+		return nil
+	}
+	tCopy := *s.topology
+	nodes := make([]client.ClusterNode, len(s.topology.Nodes))
+	copy(nodes, s.topology.Nodes)
+	tCopy.Nodes = nodes
+	return &tCopy
 }
 
 // Search performs a local regex or substring search across circuits, keys, and alerts.
@@ -474,6 +497,18 @@ func (c *SnapshotClient) InspectCacheKey(ctx context.Context, key string) (*clie
 		return c.fallback.InspectCacheKey(ctx, key)
 	}
 	return nil, errors.New("key not found in local snapshot")
+}
+
+func (c *SnapshotClient) GetClusterTopology(ctx context.Context) (*client.ClusterTopology, error) {
+	if c.store.IsSynced() {
+		if topo := c.store.Topology(); topo != nil {
+			return topo, nil
+		}
+	}
+	if c.fallback != nil {
+		return c.fallback.GetClusterTopology(ctx)
+	}
+	return nil, errors.New("cluster topology not available")
 }
 
 func (c *SnapshotClient) Close() error {

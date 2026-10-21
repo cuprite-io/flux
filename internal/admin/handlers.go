@@ -24,6 +24,7 @@ func (s *Server) registerRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/v1/eval", s.handleEval)
 	mux.HandleFunc("/api/v1/cache/keys", s.handleCacheKeys)
 	mux.HandleFunc("/api/v1/cache/item", s.handleCacheItem)
+	mux.HandleFunc("/api/v1/cluster/nodes", s.handleClusterNodes)
 }
 
 // authMiddleware enforces optional Bearer token authentication and decorates headers.
@@ -400,4 +401,21 @@ func (s *Server) handleCacheItem(w http.ResponseWriter, r *http.Request) {
 
 	s.writeJSON(w, http.StatusOK, item)
 }
+
+// handleClusterNodes handles GET /api/v1/cluster/nodes.
+func (s *Server) handleClusterNodes(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		s.writeJSONError(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+
+	topology, err := s.engine.GetClusterTopology(r.Context())
+	if err != nil {
+		s.writeJSONError(w, http.StatusInternalServerError, fmt.Sprintf("failed to get cluster topology: %v", err))
+		return
+	}
+
+	s.writeJSON(w, http.StatusOK, topology)
+}
+
 

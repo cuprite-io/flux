@@ -93,6 +93,10 @@ func (m *mockClient) InspectCacheKey(ctx context.Context, key string) (*client.C
 	return nil, nil
 }
 
+func (m *mockClient) GetClusterTopology(ctx context.Context) (*client.ClusterTopology, error) {
+	return nil, nil
+}
+
 func (m *mockClient) Close() error {
 	return nil
 }

@@ -7,6 +7,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.27.0] - 2026-10-21
+
+### Added
+
+- **Cluster Topology & Leader Election Inspector (`:nodes` / `:cluster`)** (`cmd/flux/tui/views/cluster`, `cmd/flux/tui/client`, `cmd/flux/tui/sync`, `internal/admin`, `cmd/flux/tui/model.go`):
+  - **Live Cluster Topology Inspector (`view.go`, `topology.go`)**:
+    - Implemented interactive `:cluster` / `:nodes` view (accessible via `:cluster`, `:nodes`, or shortcut `6` in Cluster Mode) inspecting distributed cluster membership, node health, and leader assignments in real time.
+    - Implemented sortable, paginated node table tracking Node ID, Role (`LEADER ★` vs `FOLLOWER`), Health Status (`HEALTHY ●`, `WARNING ⚠`, `EXPIRED ✕`), Bind Address, Stream Ports, Heartbeat Age, Lease Remaining countdowns, and Uptime.
+    - Implemented interactive split-screen layout with Tab focus switching between the nodes table and the right inspection pane.
+  - **Dynamic Consensus & Failover Audit Log**:
+    - Implemented `TopologyTracker` tracking deterministic leader elections, failovers, node joins, and lease health state transitions with a ring-buffered audit log.
+    - Added view toggle (`v`) between Node Metadata Inspector (attributes, port bindings, consensus configuration, and color-coded lease countdown gauge) and the Consensus & Failover Audit Log.
+  - **Search & Fuzzy Node Filtering**:
+    - Real-time substring filter (`/`) over node IDs, roles, health states, and bind addresses with instant table updates and `Esc` clear.
+  - **Admin API & Client Bridge Extensions**:
+    - Added `GET /api/v1/cluster/nodes` endpoint to `internal/admin` exposing registered cluster members, elected leader status, lease deadlines, and node health.
+    - Implemented `GetClusterTopology` on `*flux.Engine` reading dynamic heartbeat records from `flux:cluster:nodes` without lock contention or duplicate memory allocation.
+    - Extended `Client` interface with `GetClusterTopology` on `HTTPClient` (with graceful fallback to `/api/v1/status`), `LocalClient` (standalone memory topology), and `SnapshotClient` (offline cached cluster topology).
+    - Integrated cluster topology into local snapshot sync engine (`SnapshotStore` and `FetchSnapshotCmd`).
+
+---
+
 ## [0.26.0] - 2026-10-20
 
 ### Added

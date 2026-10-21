@@ -136,6 +136,29 @@ type CacheKeyDetail struct {
 	Value     any           `json:"value"`
 }
 
+// ClusterNode represents metadata for an active node in the distributed cluster.
+type ClusterNode struct {
+	NodeID       string            `json:"node_id"`
+	Addr         string            `json:"addr,omitempty"`
+	StreamPort   int               `json:"stream_port,omitempty"`
+	IsLeader     bool              `json:"is_leader"`
+	Status       string            `json:"status"` // "HEALTHY", "WARNING", "EXPIRED"
+	HeartbeatAge time.Duration     `json:"heartbeat_age_ms"`
+	LeaseRemain  time.Duration     `json:"lease_remain_ms"`
+	UpdatedAt    time.Time         `json:"updated_at"`
+	Uptime       string            `json:"uptime,omitempty"`
+	Metadata     map[string]string `json:"metadata,omitempty"`
+}
+
+// ClusterTopologyResponse is the payload returned by GET /api/v1/cluster/nodes.
+type ClusterTopologyResponse struct {
+	LeaderID     string        `json:"leader_id"`
+	SelfNodeID   string        `json:"self_node_id"`
+	TotalNodes   int           `json:"total_nodes"`
+	HealthyNodes int           `json:"healthy_nodes"`
+	Nodes        []ClusterNode `json:"nodes"`
+}
+
 // EngineContext defines the capabilities required from the Engine by the Admin server.
 // Flux Engine implements this interface, maintaining zero duplicate in-memory state.
 type EngineContext interface {
@@ -154,4 +177,5 @@ type EngineContext interface {
 	RegisterAlertObserver(obs func(evt AlertEvent)) func()
 	ScanCacheKeys(ctx context.Context, prefix string, limit int) ([]CacheKeyInfo, error)
 	InspectCacheKey(ctx context.Context, key string) (*CacheKeyDetail, error)
+	GetClusterTopology(ctx context.Context) (*ClusterTopologyResponse, error)
 }

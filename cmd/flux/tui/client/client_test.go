@@ -135,6 +135,39 @@ func (m *mockEngine) InspectCacheKey(ctx context.Context, key string) (*admin.Ca
 	return nil, errors.New("key not found")
 }
 
+func (m *mockEngine) GetClusterTopology(ctx context.Context) (*admin.ClusterTopologyResponse, error) {
+	return &admin.ClusterTopologyResponse{
+		LeaderID:     "node-test-1",
+		SelfNodeID:   "node-test-1",
+		TotalNodes:   2,
+		HealthyNodes: 2,
+		Nodes: []admin.ClusterNode{
+			{
+				NodeID:       "node-test-1",
+				Addr:         "127.0.0.1:9090",
+				StreamPort:   8080,
+				IsLeader:     true,
+				Status:       "HEALTHY",
+				HeartbeatAge: 500 * time.Millisecond,
+				LeaseRemain:  9500 * time.Millisecond,
+				UpdatedAt:    time.Now().UTC(),
+				Uptime:       "2h15m",
+			},
+			{
+				NodeID:       "node-test-2",
+				Addr:         "127.0.0.1:9091",
+				StreamPort:   8081,
+				IsLeader:     false,
+				Status:       "HEALTHY",
+				HeartbeatAge: 1200 * time.Millisecond,
+				LeaseRemain:  8800 * time.Millisecond,
+				UpdatedAt:    time.Now().UTC(),
+				Uptime:       "1h45m",
+			},
+		},
+	}, nil
+}
+
 
 func TestHTTPClient_FullLifecycle(t *testing.T) {
 	mockEng := newMockEngine()
@@ -248,6 +281,14 @@ func TestHTTPClient_FullLifecycle(t *testing.T) {
 	assert.Equal(t, "entity:customer:1", keyDetail.Key)
 	assert.Equal(t, "string", keyDetail.Type)
 
+	// GetClusterTopology
+	topo, err := c.GetClusterTopology(context.Background())
+	require.NoError(t, err)
+	assert.Equal(t, "node-test-1", topo.LeaderID)
+	assert.Len(t, topo.Nodes, 2)
+	assert.True(t, topo.Nodes[0].IsLeader)
+	assert.Equal(t, "HEALTHY", topo.Nodes[0].Status)
+
 	// StreamAlerts
 	streamCtx, cancelStream := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancelStream()
@@ -358,5 +399,14 @@ func TestLocalClient_StandaloneMode(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, "registry:circuits", insp.Key)
 	assert.Equal(t, "map", insp.Type)
+
+	// 8. GetClusterTopology
+	standaloneTopo, err := lc.GetClusterTopology(ctx)
+	require.NoError(t, err)
+	assert.Equal(t, 1, standaloneTopo.TotalNodes)
+	assert.Equal(t, 1, standaloneTopo.HealthyNodes)
+	require.Len(t, standaloneTopo.Nodes, 1)
+	assert.True(t, standaloneTopo.Nodes[0].IsLeader)
+	assert.Equal(t, "HEALTHY", standaloneTopo.Nodes[0].Status)
 }
 

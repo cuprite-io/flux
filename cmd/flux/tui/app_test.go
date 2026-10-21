@@ -12,9 +12,11 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/cuprite-io/flux/cmd/flux/tui"
+	"github.com/cuprite-io/flux/cmd/flux/tui/client"
 	tuisync "github.com/cuprite-io/flux/cmd/flux/tui/sync"
 	cacheview "github.com/cuprite-io/flux/cmd/flux/tui/views/cache"
 	"github.com/cuprite-io/flux/cmd/flux/tui/views/circuits"
+	clusterview "github.com/cuprite-io/flux/cmd/flux/tui/views/cluster"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -908,6 +910,145 @@ func TestTUI_CacheView_Interaction(t *testing.T) {
 	model = newM.(tui.Model)
 	assert.Contains(t, model.View(), "Refreshing cache keys")
 	require.NotNil(t, refCmd)
+}
+
+func TestTUI_ClusterView_NavigationAndInteraction(t *testing.T) {
+	m := tui.NewModel(tui.Config{Endpoint: "127.0.0.1:9090"})
+	m.SetDimensions(140, 40)
+	require.True(t, m.IsCluster())
+
+	// 1. Navigate to cluster view via command mode ":cluster"
+	newM, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{':'}})
+	model := newM.(tui.Model)
+	for _, r := range "cluster" {
+		newM, _ = model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{r}})
+		model = newM.(tui.Model)
+	}
+	newM, _ = model.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	model = newM.(tui.Model)
+
+	assert.Equal(t, tui.ViewCluster, model.CurrentView())
+	assert.Contains(t, model.View(), "Cluster Nodes")
+
+	// 2. Feed cluster topology with 3 nodes
+	topoMsg := clusterview.TopologyLoadedMsg{
+		Topology: &client.ClusterTopology{
+			LeaderID: "node-alpha",
+			Nodes: []client.ClusterNode{
+				{
+					NodeID:     "node-alpha",
+					Status:     "HEALTHY",
+					Addr:       "127.0.0.1:9090",
+					StreamPort: 9091,
+					UpdatedAt:  time.Now(),
+					Uptime:     "2h15m",
+					IsLeader:   true,
+				},
+				{
+					NodeID:     "node-beta",
+					Status:     "WARNING",
+					Addr:       "127.0.0.1:9092",
+					StreamPort: 9093,
+					UpdatedAt:  time.Now().Add(-7 * time.Second),
+					Uptime:     "1h10m",
+					IsLeader:   false,
+				},
+				{
+					NodeID:     "node-gamma",
+					Status:     "EXPIRED",
+					Addr:       "127.0.0.1:9094",
+					StreamPort: 9095,
+					UpdatedAt:  time.Now().Add(-15 * time.Second),
+					Uptime:     "45m",
+					IsLeader:   false,
+				},
+			},
+		},
+	}
+	newM, _ = model.Update(topoMsg)
+	model = newM.(tui.Model)
+
+	// Check table rows & leader display
+	viewStr := model.View()
+	assert.Contains(t, viewStr, "node-alpha")
+	assert.Contains(t, viewStr, "LEADER ★")
+	assert.Contains(t, viewStr, "node-beta")
+	assert.Contains(t, viewStr, "node-gamma")
+	assert.Contains(t, viewStr, "HEALTHY")
+	assert.Contains(t, viewStr, "WARNING")
+	assert.Contains(t, viewStr, "EXPIRED")
+
+	// Verify details panel shows selected node metadata
+	assert.Contains(t, viewStr, "Node: node-alpha")
+	assert.Contains(t, viewStr, "127.0.0.1:9090")
+	assert.Contains(t, viewStr, "9091")
+	assert.Contains(t, viewStr, "Lease Gauge:")
+
+	// 3. Test Tab key (panel focus toggle)
+	assert.Equal(t, 0, model.ClusterView().ActivePanel())
+	newM, _ = model.Update(tea.KeyMsg{Type: tea.KeyTab})
+	model = newM.(tui.Model)
+	assert.Equal(t, 1, model.ClusterView().ActivePanel())
+
+	newM, _ = model.Update(tea.KeyMsg{Type: tea.KeyTab})
+	model = newM.(tui.Model)
+	assert.Equal(t, 0, model.ClusterView().ActivePanel())
+
+	// 4. Test 'v' key (toggle between Node Metadata and Failover Audit Log)
+	assert.Equal(t, 0, model.ClusterView().PanelTab())
+	newM, _ = model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'v'}})
+	model = newM.(tui.Model)
+	assert.Equal(t, 1, model.ClusterView().PanelTab())
+	assert.Contains(t, model.View(), "Consensus & Failover Audit Log")
+
+	newM, _ = model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'v'}})
+	model = newM.(tui.Model)
+	assert.Equal(t, 0, model.ClusterView().PanelTab())
+	assert.Contains(t, model.View(), "Node: node-alpha")
+
+	// 5. Test '/' key (Filtering)
+	newM, _ = model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'/'}})
+	model = newM.(tui.Model)
+	assert.True(t, model.ClusterView().IsFiltering())
+
+	for _, r := range "beta" {
+		newM, _ = model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{r}})
+		model = newM.(tui.Model)
+	}
+	newM, _ = model.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	model = newM.(tui.Model)
+	assert.False(t, model.ClusterView().IsFiltering())
+
+	filterView := model.View()
+	assert.Contains(t, filterView, "node-beta")
+	assert.NotContains(t, filterView, "node-gamma")
+	assert.NotNil(t, model.ClusterView().SelectedNode())
+	assert.Equal(t, "node-beta", model.ClusterView().SelectedNode().NodeID)
+
+	// Clear filter with Esc
+	newM, _ = model.Update(tea.KeyMsg{Type: tea.KeyEscape})
+	model = newM.(tui.Model)
+	clearView := model.View()
+	assert.Contains(t, clearView, "node-alpha")
+	assert.Contains(t, clearView, "node-beta")
+	assert.Contains(t, clearView, "node-gamma")
+
+	// 6. Test 'r' key (Refresh)
+	newM, refCmd := model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'r'}})
+	model = newM.(tui.Model)
+	assert.Contains(t, model.View(), "Refreshing cluster topology")
+	require.NotNil(t, refCmd)
+
+	// 7. Test navigate via :nodes command
+	newM, _ = model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{':'}})
+	model = newM.(tui.Model)
+	for _, r := range "nodes" {
+		newM, _ = model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{r}})
+		model = newM.(tui.Model)
+	}
+	newM, _ = model.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	model = newM.(tui.Model)
+	assert.Equal(t, tui.ViewCluster, model.CurrentView())
 }
 
 

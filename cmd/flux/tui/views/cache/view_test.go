@@ -46,6 +46,9 @@ func (m *mockCacheClient) SubmitFeedback(ctx context.Context, req client.Feedbac
 func (m *mockCacheClient) DryRunEval(ctx context.Context, req client.EvalRequest) (*client.EvalResponse, error) {
 	return nil, nil
 }
+func (m *mockCacheClient) GetClusterTopology(ctx context.Context) (*client.ClusterTopology, error) {
+	return nil, nil
+}
 func (m *mockCacheClient) Close() error {
 	return nil
 }
