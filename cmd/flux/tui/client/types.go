@@ -44,15 +44,37 @@ type AutopilotStagingInfo struct {
 	Promoted        bool    `json:"promoted"`
 }
 
+// AutopilotCorrection captures a single failed synthesis turn and its validation errors during reflection.
+type AutopilotCorrection struct {
+	Attempt   int      `json:"attempt"`
+	Candidate string   `json:"candidate"`
+	Errors    []string `json:"errors"`
+}
+
+// AutopilotAuditLog captures AI model prompts, candidate responses, and reflection turns.
+type AutopilotAuditLog struct {
+	PromptSent        string                `json:"prompt_sent,omitempty"`
+	RawResponse       string                `json:"raw_response,omitempty"`
+	InferredSchema    string                `json:"inferred_schema,omitempty"`
+	Exemplars         []string              `json:"exemplars,omitempty"`
+	Attempts          int                   `json:"attempts"`
+	CorrectionHistory []AutopilotCorrection `json:"correction_history,omitempty"`
+}
+
 // AutopilotSession represents an autonomous AI synthesis session.
 type AutopilotSession struct {
-	SessionID      string                `json:"session_id"`
-	Prompt         string                `json:"prompt"`
-	Status         string                `json:"status"`
-	Tags           []string              `json:"tags,omitempty"`
-	ActiveCircuits []string              `json:"active_circuits,omitempty"`
-	StagingResult  *AutopilotStagingInfo `json:"staging_result,omitempty"`
-	LastError      string                `json:"last_error,omitempty"`
+	SessionID        string                `json:"session_id"`
+	Prompt           string                `json:"prompt"`
+	Status           string                `json:"status"`
+	Tags             []string              `json:"tags,omitempty"`
+	ActiveCircuits   []string              `json:"active_circuits,omitempty"`
+	SampledEvents    int64                 `json:"sampled_events"`
+	SampleThreshold  int                   `json:"sample_threshold"`
+	StagingResult    *AutopilotStagingInfo `json:"staging_result,omitempty"`
+	AuditLog         *AutopilotAuditLog    `json:"audit_log,omitempty"`
+	CandidateCircuit *types.Circuit        `json:"candidate_circuit,omitempty"`
+	ActiveCircuit    *types.Circuit        `json:"active_circuit,omitempty"`
+	LastError        string                `json:"last_error,omitempty"`
 }
 
 // AlertRecord represents a historical alert record.

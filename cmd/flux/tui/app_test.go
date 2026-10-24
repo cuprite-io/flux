@@ -17,6 +17,8 @@ import (
 	cacheview "github.com/cuprite-io/flux/cmd/flux/tui/views/cache"
 	"github.com/cuprite-io/flux/cmd/flux/tui/views/circuits"
 	clusterview "github.com/cuprite-io/flux/cmd/flux/tui/views/cluster"
+	autopilotview "github.com/cuprite-io/flux/cmd/flux/tui/views/autopilot"
+	"github.com/cuprite-io/flux/types"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -1049,6 +1051,155 @@ func TestTUI_ClusterView_NavigationAndInteraction(t *testing.T) {
 	newM, _ = model.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	model = newM.(tui.Model)
 	assert.Equal(t, tui.ViewCluster, model.CurrentView())
+}
+
+func TestTUI_AutopilotView_NavigationAndInteraction(t *testing.T) {
+	m := tui.NewModel(tui.Config{}) // standalone mode has Autopilot
+	m.SetDimensions(140, 40)
+
+	// 1. Navigate to autopilot view via command mode ":autopilot"
+	newM, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{':'}})
+	model := newM.(tui.Model)
+	for _, r := range "autopilot" {
+		newM, _ = model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{r}})
+		model = newM.(tui.Model)
+	}
+	newM, _ = model.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	model = newM.(tui.Model)
+
+	assert.Equal(t, tui.ViewAutopilot, model.CurrentView())
+	assert.Contains(t, model.View(), "Autopilot")
+
+	liveCirc := &types.Circuit{
+		ID:      "fraud-alert-live",
+		Tags:    []string{"transactions"},
+		Version: 1,
+		Root: &types.Node{
+			Name:      "check_amt",
+			Condition: "payload.amount > 5000",
+		},
+	}
+	candCirc := &types.Circuit{
+		ID:      "fraud-alert-candidate",
+		Tags:    []string{"transactions"},
+		Version: 2,
+		Root: &types.Node{
+			Name:      "check_amt_v2",
+			Condition: "payload.amount > 3000 && payload.country != 'US'",
+		},
+	}
+
+	// 2. Feed autopilot sessions via message
+	autopilotMsg := autopilotview.AutopilotLoadedMsg{
+		Sessions: []client.AutopilotSession{
+			{
+				SessionID:       "autopilot-session-1",
+				Prompt:          "Detect suspicious payment velocity",
+				Status:          "SAMPLING",
+				Tags:            []string{"payments"},
+				SampledEvents:   18,
+				SampleThreshold: 25,
+			},
+			{
+				SessionID:        "autopilot-session-2",
+				Prompt:           "Adaptive fraud rules with shadow safety",
+				Status:           "LIVE",
+				Tags:             []string{"transactions"},
+				CandidateCircuit: candCirc,
+				ActiveCircuit:    liveCirc,
+				AuditLog: &client.AutopilotAuditLog{
+					PromptSent:     "Synthesize payment anomaly DAG",
+					RawResponse:    `{"id":"fraud-alert-candidate"}`,
+					InferredSchema: `{"amount":"number","country":"string"}`,
+					Attempts:       1,
+				},
+			},
+		},
+	}
+	newM, _ = model.Update(autopilotMsg)
+	model = newM.(tui.Model)
+
+	// Check table & gauge rendering
+	viewStr := model.View()
+	assert.Contains(t, viewStr, "autopilot-session-1")
+	assert.Contains(t, viewStr, "SAMPLING")
+	assert.Contains(t, viewStr, "Detect suspicious payment velocity")
+	assert.Contains(t, viewStr, "18/25 events (72%)")
+
+	// 3. Test Tab key (panel focus switch)
+	assert.Equal(t, 0, model.AutopilotView().ActivePanel())
+	newM, _ = model.Update(tea.KeyMsg{Type: tea.KeyTab})
+	model = newM.(tui.Model)
+	assert.Equal(t, 1, model.AutopilotView().ActivePanel())
+
+	newM, _ = model.Update(tea.KeyMsg{Type: tea.KeyTab})
+	model = newM.(tui.Model)
+	assert.Equal(t, 0, model.AutopilotView().ActivePanel())
+
+	// 4. Test Down arrow to select session 2 (LIVE)
+	newM, _ = model.Update(tea.KeyMsg{Type: tea.KeyDown})
+	model = newM.(tui.Model)
+	require.NotNil(t, model.AutopilotView().SelectedSession())
+	assert.Equal(t, "autopilot-session-2", model.AutopilotView().SelectedSession().SessionID)
+
+	// 5. Test 'v' key (toggle to Circuit Diff)
+	assert.Equal(t, 0, model.AutopilotView().PanelTab())
+	newM, _ = model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'v'}})
+	model = newM.(tui.Model)
+	assert.Equal(t, 1, model.AutopilotView().PanelTab())
+	assert.Contains(t, model.View(), "Circuit Diff: Live")
+	assert.Contains(t, model.View(), "fraud-alert-live")
+	assert.Contains(t, model.View(), "fraud-alert-candidate")
+
+	// 6. Test 'd' key (toggle diff format)
+	assert.Equal(t, 0, model.AutopilotView().DiffMode())
+	newM, _ = model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'d'}})
+	model = newM.(tui.Model)
+	assert.Equal(t, 1, model.AutopilotView().DiffMode())
+	assert.Contains(t, model.View(), "Mode: Side-by-Side")
+
+	// 7. Test 'a' key (jump back to AI Audit Log)
+	newM, _ = model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'a'}})
+	model = newM.(tui.Model)
+	assert.Equal(t, 0, model.AutopilotView().PanelTab())
+	assert.Contains(t, model.View(), "AI Autopilot Audit Log")
+	assert.Contains(t, model.View(), "Synthesize payment anomaly DAG")
+
+	// 8. Test '/' key (Filtering)
+	newM, _ = model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'/'}})
+	model = newM.(tui.Model)
+	assert.True(t, model.AutopilotView().IsFiltering())
+
+	for _, r := range "payments" {
+		newM, _ = model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{r}})
+		model = newM.(tui.Model)
+	}
+	newM, _ = model.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	model = newM.(tui.Model)
+	assert.False(t, model.AutopilotView().IsFiltering())
+	assert.Equal(t, "autopilot-session-1", model.AutopilotView().SelectedSession().SessionID)
+
+	// Clear filter with Esc
+	newM, _ = model.Update(tea.KeyMsg{Type: tea.KeyEscape})
+	model = newM.(tui.Model)
+	assert.Equal(t, 2, len(model.AutopilotView().Sessions()))
+
+	// 9. Test 'r' key (Refresh)
+	newM, refCmd := model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'r'}})
+	model = newM.(tui.Model)
+	assert.Contains(t, model.AutopilotView().StatusMsg(), "Refreshing autopilot sessions")
+	require.NotNil(t, refCmd)
+
+	// 10. Test navigate via :auto shortcut
+	newM, _ = model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{':'}})
+	model = newM.(tui.Model)
+	for _, r := range "auto" {
+		newM, _ = model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{r}})
+		model = newM.(tui.Model)
+	}
+	newM, _ = model.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	model = newM.(tui.Model)
+	assert.Equal(t, tui.ViewAutopilot, model.CurrentView())
 }
 
 

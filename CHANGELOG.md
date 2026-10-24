@@ -7,6 +7,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.28.0] - 2026-10-23
+
+### Added
+
+- **Live Autopilot Cockpit & AI Audit Log (`:autopilot`)** (`cmd/flux/tui/views/autopilot`, `cmd/flux/tui/client`, `internal/admin`, `flux.go`, `cmd/flux/tui/model.go`):
+  - **Live Autopilot Cockpit (`view.go`)**:
+    - Implemented interactive `:autopilot` view (accessible via `:autopilot`, `:auto`, `:a`, or shortcut `2`/`3`) providing transparency into autonomous streaming operations.
+    - Added multi-stage Phase Progression Gauge tracking lifecycle progression: `[1. SAMPLING] ──> [2. SYNTHESIZING] ──> [3. SHADOWING] ──> [4. LIVE]` with real-time state highlighting and completion checkmarks.
+    - Added Sampling Progress Bar measuring cold-start profiling progress against target thresholds (`24/30 events (80%)`).
+    - Added Shadow Safety Gauge visualizing observed firing rates against target envelope windows, event counts, error counts, and promotion badges (`PROMOTED ★`, `SHADOW EVALUATION`, `REJECTED ✕`).
+  - **Explainable AI Audit Log Drawer (`audit_log.go`)**:
+    - Expandable terminal drawer displaying user policy goals, target tags, inferred data schemas, and captured exemplars from Schema Tap and Profiler.
+    - Full transparency into model prompts dispatched, synthesized candidate JSON outputs, and reflection turns with compiler/linter error feedback.
+  - **Visual Circuit Diff Engine (`diff.go`)**:
+    - Implemented color-coded circuit diff engine (`v`) comparing active live circuits against newly synthesized candidates or refined DAGs.
+    - Toggleable between Unified Diff and Side-by-Side (`d`) comparison layouts with additions in green, deletions in red, and context lines.
+  - **Backend Telemetry & Client Bridge Extensions**:
+    - Extended `AutopilotSessionInfo` and `AutopilotSession` with `AuditLog`, `SampledEvents`, `SampleThreshold`, `CandidateCircuit`, and `ActiveCircuit`.
+    - Integrated session telemetry into `*flux.Engine.GetAutopilotSessions` and `LocalClient.GetAutopilot`.
+
+---
+
 ## [0.27.0] - 2026-10-21
 
 ### Added

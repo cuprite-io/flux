@@ -890,13 +890,18 @@ func (e *Engine) GetAutopilotSessions(ctx context.Context) []admin.AutopilotSess
 			lastErrStr = h.lastErr.Error()
 		}
 		sessions = append(sessions, admin.AutopilotSessionInfo{
-			SessionID:      fmt.Sprintf("autopilot-%d", i+1),
-			Prompt:         h.prompt,
-			Status:         string(status),
-			Tags:           slices.Clone(h.tags),
-			ActiveCircuits: h.ActiveCircuits(),
-			StagingResult:  stagingInfo,
-			LastError:      lastErrStr,
+			SessionID:        fmt.Sprintf("autopilot-%d", i+1),
+			Prompt:           h.prompt,
+			Status:           string(status),
+			Tags:             slices.Clone(h.tags),
+			ActiveCircuits:   h.ActiveCircuits(),
+			SampledEvents:    h.SampledEvents(),
+			SampleThreshold:  h.cfg.SampleThreshold,
+			StagingResult:    stagingInfo,
+			AuditLog:         h.AuditLog(),
+			CandidateCircuit: h.CandidateCircuit(),
+			ActiveCircuit:    h.ActiveCircuit(),
+			LastError:        lastErrStr,
 		})
 	}
 	return sessions

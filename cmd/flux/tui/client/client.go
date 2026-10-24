@@ -582,14 +582,38 @@ func (l *LocalClient) GetAutopilot(ctx context.Context) ([]AutopilotSession, err
 				Promoted:        s.StagingResult.Promoted,
 			}
 		}
+		var auditLog *AutopilotAuditLog
+		if s.AuditLog != nil {
+			corrections := make([]AutopilotCorrection, len(s.AuditLog.CorrectionHistory))
+			for j, c := range s.AuditLog.CorrectionHistory {
+				corrections[j] = AutopilotCorrection{
+					Attempt:   c.Attempt,
+					Candidate: c.Candidate,
+					Errors:    c.Errors,
+				}
+			}
+			auditLog = &AutopilotAuditLog{
+				PromptSent:        s.AuditLog.PromptSent,
+				RawResponse:       s.AuditLog.RawResponse,
+				InferredSchema:    s.AuditLog.InferredSchema,
+				Exemplars:         s.AuditLog.Exemplars,
+				Attempts:          s.AuditLog.Attempts,
+				CorrectionHistory: corrections,
+			}
+		}
 		result[i] = AutopilotSession{
-			SessionID:      s.SessionID,
-			Prompt:         s.Prompt,
-			Status:         s.Status,
-			Tags:           s.Tags,
-			ActiveCircuits: s.ActiveCircuits,
-			StagingResult:  stInfo,
-			LastError:      s.LastError,
+			SessionID:        s.SessionID,
+			Prompt:           s.Prompt,
+			Status:           s.Status,
+			Tags:             s.Tags,
+			ActiveCircuits:   s.ActiveCircuits,
+			SampledEvents:    s.SampledEvents,
+			SampleThreshold:  s.SampleThreshold,
+			StagingResult:    stInfo,
+			AuditLog:         auditLog,
+			CandidateCircuit: s.CandidateCircuit,
+			ActiveCircuit:    s.ActiveCircuit,
+			LastError:        s.LastError,
 		}
 	}
 	return result, nil

@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"slices"
@@ -13,6 +14,7 @@ import (
 
 	"github.com/cuprite-io/assay"
 	"github.com/cuprite-io/flux/autopilot"
+	"github.com/cuprite-io/flux/internal/admin"
 	internalautopilot "github.com/cuprite-io/flux/internal/autopilot"
 	"github.com/cuprite-io/flux/internal/cluster"
 	"github.com/cuprite-io/flux/internal/history"
@@ -183,6 +185,10 @@ type AutopilotHandle struct {
 	status         AutopilotStatus
 	circuit        *types.Circuit
 	activeCircuits []string
+	candidate      *types.Circuit
+	activeCircuit  *types.Circuit
+	auditLog       *admin.AutopilotAuditLog
+	sampledCount   atomic.Int64
 	stagingResult  *internalautopilot.StagingResult
 	lastErr        error
 
@@ -209,6 +215,35 @@ func (h *AutopilotHandle) CurrentCircuit() *types.Circuit {
 	h.mu.RLock()
 	defer h.mu.RUnlock()
 	return h.circuit
+}
+
+// CandidateCircuit returns the candidate Circuit DAG, or nil if not yet synthesized.
+func (h *AutopilotHandle) CandidateCircuit() *types.Circuit {
+	h.mu.RLock()
+	defer h.mu.RUnlock()
+	return h.candidate
+}
+
+// ActiveCircuit returns the active Live Circuit DAG prior to or following promotion.
+func (h *AutopilotHandle) ActiveCircuit() *types.Circuit {
+	h.mu.RLock()
+	defer h.mu.RUnlock()
+	if h.activeCircuit != nil {
+		return h.activeCircuit
+	}
+	return h.circuit
+}
+
+// AuditLog returns the audit log of prompts, responses, and reflection turns.
+func (h *AutopilotHandle) AuditLog() *admin.AutopilotAuditLog {
+	h.mu.RLock()
+	defer h.mu.RUnlock()
+	return h.auditLog
+}
+
+// SampledEvents returns the count of cold-start sampled events so far.
+func (h *AutopilotHandle) SampledEvents() int64 {
+	return h.sampledCount.Load()
 }
 
 // StagingResult returns the verification metrics from the shadow evaluation phase.
@@ -462,6 +497,7 @@ func (h *AutopilotHandle) runSession(ctx context.Context) {
 				sampledCount += int64(prof.TotalSampled)
 			}
 		}
+		h.sampledCount.Store(sampledCount)
 
 		if sampledCount < int64(h.cfg.SampleThreshold) {
 			sampleDoneCh := make(chan struct{})
@@ -476,7 +512,9 @@ func (h *AutopilotHandle) runSession(ctx context.Context) {
 					}
 				}
 				if match || len(h.tags) == 0 {
-					if atomic.AddInt64(&sampledCount, 1) >= int64(h.cfg.SampleThreshold) {
+					current := atomic.AddInt64(&sampledCount, 1)
+					h.sampledCount.Store(current)
+					if current >= int64(h.cfg.SampleThreshold) {
 						once.Do(func() {
 							close(sampleDoneCh)
 						})
@@ -578,6 +616,55 @@ func (h *AutopilotHandle) runSession(ctx context.Context) {
 		candidate.ID = fmt.Sprintf("autopilot-%s", hex.EncodeToString(randomSuffix))
 	}
 
+	var corrections []admin.AutopilotCorrection
+	for _, c := range synthRes.CorrectionHistory {
+		var errStrs []string
+		for _, e := range c.Errors {
+			errStrs = append(errStrs, e.String())
+		}
+		corrections = append(corrections, admin.AutopilotCorrection{
+			Attempt:   c.Attempt,
+			Candidate: c.Candidate,
+			Errors:    errStrs,
+		})
+	}
+
+	var schemaStr string
+	if len(schemas) > 0 {
+		if b, err := json.MarshalIndent(schemas, "", "  "); err == nil {
+			schemaStr = string(b)
+		}
+	}
+	var exemplars []string
+	for _, p := range profiles {
+		if p != nil && len(p.Exemplars) > 0 {
+			for _, ex := range p.Exemplars {
+				if b, err := json.Marshal(ex); err == nil {
+					exemplars = append(exemplars, string(b))
+				}
+			}
+		}
+	}
+
+	activeList := h.engine.registry.GetMatching(ctx, h.tags...)
+	var liveCirc *types.Circuit
+	if len(activeList) > 0 {
+		liveCirc = activeList[0]
+	}
+
+	h.mu.Lock()
+	h.candidate = candidate
+	h.activeCircuit = liveCirc
+	h.auditLog = &admin.AutopilotAuditLog{
+		PromptSent:        h.prompt,
+		RawResponse:       synthRes.CleanJSON,
+		InferredSchema:    schemaStr,
+		Exemplars:         exemplars,
+		Attempts:          synthRes.Attempts,
+		CorrectionHistory: corrections,
+	}
+	h.mu.Unlock()
+
 	// 4. Shadow Verification Phase
 	stager := internalautopilot.NewStager(h.engine.registry,
 		internalautopilot.WithEvaluationEvents(h.cfg.ShadowEvaluationEvents),
@@ -663,6 +750,7 @@ func (h *AutopilotHandle) runSession(ctx context.Context) {
 	// 5. Promoted to Live & Continuous Refinement Phase
 	h.mu.Lock()
 	h.circuit = candidate
+	h.activeCircuit = candidate
 	h.activeCircuits = []string{candidate.ID}
 	h.status = StatusLive
 	h.mu.Unlock()

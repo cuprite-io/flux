@@ -20,6 +20,7 @@ import (
 	cacheview "github.com/cuprite-io/flux/cmd/flux/tui/views/cache"
 	"github.com/cuprite-io/flux/cmd/flux/tui/views/circuits"
 	clusterview "github.com/cuprite-io/flux/cmd/flux/tui/views/cluster"
+	autopilotview "github.com/cuprite-io/flux/cmd/flux/tui/views/autopilot"
 )
 
 // TickMsg triggers regular background UI refresh.
@@ -27,11 +28,12 @@ type TickMsg time.Time
 
 // Model is the top-level Bubble Tea model for the Flux shell.
 type Model struct {
-	client       client.Client
-	circuitsView circuits.Model
-	cacheView    cacheview.Model
-	clusterView  clusterview.Model
-	keys         KeyMap
+	client        client.Client
+	circuitsView  circuits.Model
+	cacheView     cacheview.Model
+	clusterView   clusterview.Model
+	autopilotView autopilotview.Model
+	keys          KeyMap
 	currentView  ViewID
 	previousView ViewID
 	width        int
@@ -101,23 +103,24 @@ func NewModel(cfg Config) Model {
 	syncEngine := tuisync.NewSyncer(store, tuisync.DefaultConfig())
 
 	return Model{
-		client:       cli,
-		circuitsView: circuits.New(cli),
-		cacheView:    cacheview.New(cli),
-		clusterView:  clusterview.New(cli),
-		keys:         DefaultKeyMap(),
-		currentView:  ViewCircuits,
-		previousView: ViewCircuits,
-		version:      flux.Version,
-		isCluster:    isCluster,
-		endpoint:     endpoint,
-		token:        cfg.Token,
-		nodeCount:    1,
-		leaderID:     leaderID,
-		syncer:       syncEngine,
-		currentTime:  time.Now(),
-		commandInput: ti,
-		statusMsg:    "Flux Shell active. Press '?' for help, ':' for commands.",
+		client:        cli,
+		circuitsView:  circuits.New(cli),
+		cacheView:     cacheview.New(cli),
+		clusterView:   clusterview.New(cli),
+		autopilotView: autopilotview.New(cli),
+		keys:          DefaultKeyMap(),
+		currentView:   ViewCircuits,
+		previousView:  ViewCircuits,
+		version:       flux.Version,
+		isCluster:     isCluster,
+		endpoint:      endpoint,
+		token:         cfg.Token,
+		nodeCount:     1,
+		leaderID:      leaderID,
+		syncer:        syncEngine,
+		currentTime:   time.Now(),
+		commandInput:  ti,
+		statusMsg:     "Flux Shell active. Press '?' for help, ':' for commands.",
 	}
 }
 
@@ -139,6 +142,11 @@ func (m Model) CacheView() cacheview.Model {
 // ClusterView returns the Cluster Topology & Leader Election Inspector view component.
 func (m Model) ClusterView() clusterview.Model {
 	return m.clusterView
+}
+
+// AutopilotView returns the Live Autopilot Cockpit & AI Audit Log view component.
+func (m Model) AutopilotView() autopilotview.Model {
+	return m.autopilotView
 }
 
 // Syncer returns the local snapshot synchronization engine.
@@ -174,6 +182,7 @@ func (m *Model) SetDimensions(w, h int) {
 	m.circuitsView.SetDimensions(w-4, contentHeight-2)
 	m.cacheView.SetDimensions(w-4, contentHeight-2)
 	m.clusterView.SetDimensions(w-4, contentHeight-2)
+	m.autopilotView.SetDimensions(w-4, contentHeight-2)
 }
 
 // CurrentView returns the currently active view ID.
@@ -237,6 +246,7 @@ func (m Model) Init() tea.Cmd {
 		m.circuitsView.Init(),
 		m.cacheView.Init(),
 		m.clusterView.Init(),
+		m.autopilotView.Init(),
 	)
 }
 
@@ -284,6 +294,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m, cmd
 
+	case autopilotview.AutopilotLoadedMsg:
+		var cmd tea.Cmd
+		m.autopilotView, cmd = m.autopilotView.Update(msg)
+		return m, cmd
+
 	case tuisync.SyncStartedMsg:
 		return m, nil
 
@@ -305,6 +320,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				cmds = append(cmds, m.circuitsView.SetClient(m.syncer.Client(m.client)))
 				cmds = append(cmds, m.cacheView.SetClient(m.syncer.Client(m.client)))
 				cmds = append(cmds, m.clusterView.SetClient(m.syncer.Client(m.client)))
+				cmds = append(cmds, m.autopilotView.SetClient(m.syncer.Client(m.client)))
 			}
 		}
 		return m, tea.Batch(cmds...)
@@ -316,6 +332,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		cmds = append(cmds, m.circuitsView.SetClient(m.client))
 		cmds = append(cmds, m.cacheView.SetClient(m.client))
 		cmds = append(cmds, m.clusterView.SetClient(m.client))
+		cmds = append(cmds, m.autopilotView.SetClient(m.client))
 		return m, tea.Batch(cmds...)
 
 	case TickMsg:
@@ -376,6 +393,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 						cmds = append(cmds, m.circuitsView.SetClient(m.client))
 						cmds = append(cmds, m.cacheView.SetClient(m.client))
 						cmds = append(cmds, m.clusterView.SetClient(m.client))
+						cmds = append(cmds, m.autopilotView.SetClient(m.client))
 					}
 					m.SetStatus(fmt.Sprintf("Connected to %s (Cluster Mode)", probeRes.URL), false)
 					cmds = append(cmds, m.WindowTitleCmd())
@@ -401,6 +419,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					cmds = append(cmds, m.circuitsView.SetClient(m.client))
 					cmds = append(cmds, m.cacheView.SetClient(m.client))
 					cmds = append(cmds, m.clusterView.SetClient(m.client))
+					cmds = append(cmds, m.autopilotView.SetClient(m.client))
 					if m.syncer != nil {
 						cmds = append(cmds, m.syncer.SetEnabled(false, nil))
 					}
@@ -587,6 +606,40 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				var cmd tea.Cmd
 				m.clusterView, cmd = m.clusterView.Update(msg)
 				if status := m.clusterView.StatusMsg(); status != "" {
+					m.SetStatus(status, false)
+				}
+				return m, cmd
+			}
+		}
+
+		if m.currentView == ViewAutopilot {
+			if m.autopilotView.IsFiltering() {
+				var cmd tea.Cmd
+				m.autopilotView, cmd = m.autopilotView.Update(msg)
+				return m, cmd
+			}
+			if key.Matches(msg, m.keys.Command) {
+				m.commandMode = true
+				m.commandInput.Focus()
+				return m, textinput.Blink
+			}
+			switch msg.String() {
+			case "/", "v", "a", "d", "r", "tab":
+				var cmd tea.Cmd
+				m.autopilotView, cmd = m.autopilotView.Update(msg)
+				if status := m.autopilotView.StatusMsg(); status != "" {
+					m.SetStatus(status, false)
+				}
+				return m, cmd
+			}
+			if key.Matches(msg, m.keys.Enter) || key.Matches(msg, m.keys.Escape) ||
+				key.Matches(msg, m.keys.Up) || key.Matches(msg, m.keys.Down) ||
+				msg.String() == "k" || msg.String() == "j" ||
+				msg.String() == "pgup" || msg.String() == "pgdown" ||
+				msg.String() == "u" || msg.String() == "ctrl+d" {
+				var cmd tea.Cmd
+				m.autopilotView, cmd = m.autopilotView.Update(msg)
+				if status := m.autopilotView.StatusMsg(); status != "" {
 					m.SetStatus(status, false)
 				}
 				return m, cmd
@@ -833,6 +886,16 @@ func (m Model) renderFooter() string {
 			StyleKey.Render("/") + StyleKeyHelp.Render(" filter, ") +
 			StyleKey.Render("r") + StyleKeyHelp.Render(" refresh, ") +
 			StyleKey.Render(":") + StyleKeyHelp.Render(" commands")
+	} else if m.currentView == ViewAutopilot && m.autopilotView.IsFiltering() {
+		left = StyleStatusMsg.Render("Filter mode active. Type session ID/prompt/tag search query, Enter to accept, Esc to cancel.")
+	} else if m.currentView == ViewAutopilot {
+		left = StyleKeyHelp.Render("Press ") + StyleKey.Render("Tab") + StyleKeyHelp.Render(" switch panel, ") +
+			StyleKey.Render("v") + StyleKeyHelp.Render(" diff, ") +
+			StyleKey.Render("a") + StyleKeyHelp.Render(" audit log, ") +
+			StyleKey.Render("d") + StyleKeyHelp.Render(" diff mode, ") +
+			StyleKey.Render("/") + StyleKeyHelp.Render(" filter, ") +
+			StyleKey.Render("r") + StyleKeyHelp.Render(" refresh, ") +
+			StyleKey.Render(":") + StyleKeyHelp.Render(" commands")
 	} else {
 		left = StyleKeyHelp.Render("Press ") + StyleKey.Render(":") + StyleKeyHelp.Render(" for commands, ") +
 			StyleKey.Render("Tab") + StyleKeyHelp.Render(" switch view, ") +
@@ -862,15 +925,7 @@ func (m Model) renderContent(height int) string {
 		return panelStyle.Render(m.circuitsView.View())
 
 	case ViewAutopilot:
-		return panelStyle.Render(m.placeholderPanel(
-			"🤖 Autopilot Live Cockpit (:autopilot)",
-			"Autopilot session status: IDLE",
-			[]string{
-				"• Tracks sampling phase, candidate DAG synthesis, and reflection iterations.",
-				"• Live shadow mode safety gauge (evaluating error coverage & firing rates).",
-				"• Press 'v' to view candidate DAG diffs; 'a' to inspect raw LLM prompts & logs.",
-			},
-		))
+		return StyleViewport.Render(m.autopilotView.View())
 
 	case ViewCache:
 		return StyleViewport.Render(m.cacheView.View())
