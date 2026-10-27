@@ -21,6 +21,7 @@ import (
 	"github.com/cuprite-io/flux/cmd/flux/tui/views/circuits"
 	clusterview "github.com/cuprite-io/flux/cmd/flux/tui/views/cluster"
 	autopilotview "github.com/cuprite-io/flux/cmd/flux/tui/views/autopilot"
+	evalview "github.com/cuprite-io/flux/cmd/flux/tui/views/eval"
 )
 
 // TickMsg triggers regular background UI refresh.
@@ -33,6 +34,7 @@ type Model struct {
 	cacheView     cacheview.Model
 	clusterView   clusterview.Model
 	autopilotView autopilotview.Model
+	evalView      evalview.Model
 	keys          KeyMap
 	currentView  ViewID
 	previousView ViewID
@@ -108,6 +110,7 @@ func NewModel(cfg Config) Model {
 		cacheView:     cacheview.New(cli),
 		clusterView:   clusterview.New(cli),
 		autopilotView: autopilotview.New(cli),
+		evalView:      evalview.New(cli),
 		keys:          DefaultKeyMap(),
 		currentView:   ViewCircuits,
 		previousView:  ViewCircuits,
@@ -149,6 +152,11 @@ func (m Model) AutopilotView() autopilotview.Model {
 	return m.autopilotView
 }
 
+// EvalView returns the Dry-Run Playground & REPL view component.
+func (m Model) EvalView() evalview.Model {
+	return m.evalView
+}
+
 // Syncer returns the local snapshot synchronization engine.
 func (m Model) Syncer() *tuisync.Syncer {
 	return m.syncer
@@ -183,6 +191,7 @@ func (m *Model) SetDimensions(w, h int) {
 	m.cacheView.SetDimensions(w-4, contentHeight-2)
 	m.clusterView.SetDimensions(w-4, contentHeight-2)
 	m.autopilotView.SetDimensions(w-4, contentHeight-2)
+	m.evalView.SetDimensions(w-4, contentHeight-2)
 }
 
 // CurrentView returns the currently active view ID.
@@ -247,6 +256,7 @@ func (m Model) Init() tea.Cmd {
 		m.cacheView.Init(),
 		m.clusterView.Init(),
 		m.autopilotView.Init(),
+		m.evalView.Init(),
 	)
 }
 
@@ -270,8 +280,19 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case circuits.DryRunHandoffMsg:
 		m.SetView(ViewEval)
-		m.SetStatus(fmt.Sprintf("Transferred circuit %q to Dry-Run Playground.", msg.CircuitID), false)
-		return m, nil
+		cmd := m.evalView.HandleHandoff(msg)
+		if status := m.evalView.StatusMsg(); status != "" {
+			m.SetStatus(status, false)
+		}
+		return m, cmd
+
+	case evalview.EvalCompletedMsg, evalview.ExemplarLoadedMsg, evalview.CircuitsLoadedMsg:
+		var cmd tea.Cmd
+		m.evalView, cmd = m.evalView.Update(msg)
+		if status := m.evalView.StatusMsg(); status != "" {
+			m.SetStatus(status, false)
+		}
+		return m, cmd
 
 	case cacheview.CacheKeysLoadedMsg:
 		var cmd tea.Cmd
@@ -321,6 +342,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				cmds = append(cmds, m.cacheView.SetClient(m.syncer.Client(m.client)))
 				cmds = append(cmds, m.clusterView.SetClient(m.syncer.Client(m.client)))
 				cmds = append(cmds, m.autopilotView.SetClient(m.syncer.Client(m.client)))
+				cmds = append(cmds, m.evalView.SetClient(m.syncer.Client(m.client)))
 			}
 		}
 		return m, tea.Batch(cmds...)
@@ -333,6 +355,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		cmds = append(cmds, m.cacheView.SetClient(m.client))
 		cmds = append(cmds, m.clusterView.SetClient(m.client))
 		cmds = append(cmds, m.autopilotView.SetClient(m.client))
+		cmds = append(cmds, m.evalView.SetClient(m.client))
 		return m, tea.Batch(cmds...)
 
 	case TickMsg:
@@ -394,6 +417,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 						cmds = append(cmds, m.cacheView.SetClient(m.client))
 						cmds = append(cmds, m.clusterView.SetClient(m.client))
 						cmds = append(cmds, m.autopilotView.SetClient(m.client))
+						cmds = append(cmds, m.evalView.SetClient(m.client))
 					}
 					m.SetStatus(fmt.Sprintf("Connected to %s (Cluster Mode)", probeRes.URL), false)
 					cmds = append(cmds, m.WindowTitleCmd())
@@ -640,6 +664,46 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				var cmd tea.Cmd
 				m.autopilotView, cmd = m.autopilotView.Update(msg)
 				if status := m.autopilotView.StatusMsg(); status != "" {
+					m.SetStatus(status, false)
+				}
+				return m, cmd
+			}
+		}
+
+		if m.currentView == ViewEval {
+			if m.evalView.IsEditorFocused() {
+				var cmd tea.Cmd
+				m.evalView, cmd = m.evalView.Update(msg)
+				if status := m.evalView.StatusMsg(); status != "" {
+					m.SetStatus(status, false)
+				}
+				return m, cmd
+			}
+
+			if key.Matches(msg, m.keys.Command) {
+				m.commandMode = true
+				m.commandInput.Focus()
+				return m, textinput.Blink
+			}
+
+			switch msg.String() {
+			case "i", "r", "e", "c", "f", "tab", "ctrl+r", "ctrl+e", "ctrl+f", "ctrl+enter":
+				var cmd tea.Cmd
+				m.evalView, cmd = m.evalView.Update(msg)
+				if status := m.evalView.StatusMsg(); status != "" {
+					m.SetStatus(status, false)
+				}
+				return m, cmd
+			}
+
+			if key.Matches(msg, m.keys.Enter) || key.Matches(msg, m.keys.Escape) ||
+				key.Matches(msg, m.keys.Up) || key.Matches(msg, m.keys.Down) ||
+				msg.String() == "k" || msg.String() == "j" ||
+				msg.String() == "pgup" || msg.String() == "pgdown" ||
+				msg.String() == "u" || msg.String() == "ctrl+d" {
+				var cmd tea.Cmd
+				m.evalView, cmd = m.evalView.Update(msg)
+				if status := m.evalView.StatusMsg(); status != "" {
 					m.SetStatus(status, false)
 				}
 				return m, cmd
@@ -931,15 +995,7 @@ func (m Model) renderContent(height int) string {
 		return StyleViewport.Render(m.cacheView.View())
 
 	case ViewEval:
-		return panelStyle.Render(m.placeholderPanel(
-			"🧪 Dry-Run Playground & REPL (:eval)",
-			"Ready for offline simulation.",
-			[]string{
-				"• Interactive split-screen playground for testing JSON payloads against DAGs.",
-				"• Press 'e' to load the latest real exemplar captured by Schema Tap.",
-				"• Color-coded branch execution: Green=taken, Gray=pruned, Cyan=VoltScript mutations.",
-			},
-		))
+		return StyleViewport.Render(m.evalView.View())
 
 	case ViewAlerts:
 		return panelStyle.Render(m.placeholderPanel(

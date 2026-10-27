@@ -1202,5 +1202,115 @@ func TestTUI_AutopilotView_NavigationAndInteraction(t *testing.T) {
 	assert.Equal(t, tui.ViewAutopilot, model.CurrentView())
 }
 
+func TestTUI_EvalView_NavigationAndInteraction(t *testing.T) {
+	circDef := &types.Circuit{
+		ID:   "fraud_sentinel",
+		Tags: []string{"payments"},
+		Root: &types.Node{
+			Name:      "root_guard",
+			Condition: "payload.amount >= 1000.0",
+			Steps: []*types.StepDefinition{
+				{
+					Type:   types.StepVolt,
+					Script: "set('tier', 'platinum')",
+				},
+				{
+					Type:      types.StepSink,
+					SinkName:  "slack_ops",
+					Condition: "payload.amount >= 10000.0",
+				},
+			},
+		},
+	}
+
+	m := tui.NewModel(tui.Config{})
+	m.SetDimensions(120, 30)
+
+	// Feed circuit inventory
+	initM, _ := m.Update(circuits.CircuitsLoadedMsg{
+		Circuits: []client.CircuitSummary{
+			{ID: "fraud_sentinel", Tags: []string{"payments"}, NodeCount: 1, Status: "LIVE", Definition: circDef},
+		},
+	})
+	m = initM.(tui.Model)
+
+	// 1. Navigate to :eval via :eval command
+	newM, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{':'}})
+	model := newM.(tui.Model)
+	for _, r := range "eval" {
+		newM, _ = model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{r}})
+		model = newM.(tui.Model)
+	}
+	newM, _ = model.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	model = newM.(tui.Model)
+	assert.Equal(t, tui.ViewEval, model.CurrentView())
+
+	// 2. Verify split screen view rendering
+	viewStr := model.View()
+	assert.Contains(t, viewStr, "Dry-Run Playground")
+	assert.Contains(t, viewStr, "Event Payload (JSON)")
+	assert.Contains(t, viewStr, "Live Branch Evaluation")
+
+	// 3. Test Tab key pane focus toggle
+	newM, _ = model.Update(tea.KeyMsg{Type: tea.KeyTab})
+	model = newM.(tui.Model)
+	assert.False(t, model.EvalView().IsEditorFocused())
+
+	newM, _ = model.Update(tea.KeyMsg{Type: tea.KeyTab})
+	model = newM.(tui.Model)
+	assert.False(t, model.EvalView().IsEditorFocused())
+
+	// 4. Test 'i' key enters editor focus
+	newM, _ = model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'i'}})
+	model = newM.(tui.Model)
+	assert.True(t, model.EvalView().IsEditorFocused())
+
+	// 5. Test 'esc' key exits editor focus
+	newM, _ = model.Update(tea.KeyMsg{Type: tea.KeyEscape})
+	model = newM.(tui.Model)
+	assert.False(t, model.EvalView().IsEditorFocused())
+
+	// 6. Test 'f' key formats JSON
+	newM, _ = model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'f'}})
+	model = newM.(tui.Model)
+	assert.Contains(t, model.EvalView().StatusMsg(), "Beautified JSON")
+
+	// 7. Test 'r' key runs evaluation
+	newM, runCmd := model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'r'}})
+	model = newM.(tui.Model)
+	require.NotNil(t, runCmd)
+	evalMsg := runCmd()
+	newM, _ = model.Update(evalMsg)
+	model = newM.(tui.Model)
+	assert.Contains(t, model.EvalView().StatusMsg(), "Dry-run evaluated")
+
+	// 8. Test 'e' key pulls Schema Tap exemplar
+	newM, exCmd := model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'e'}})
+	model = newM.(tui.Model)
+	require.NotNil(t, exCmd)
+	exMsg := exCmd()
+	newM, _ = model.Update(exMsg)
+	model = newM.(tui.Model)
+	assert.Contains(t, model.EvalView().StatusMsg(), "Loaded exemplar")
+
+	// 9. Test handoff from Circuits view: press 'd'
+	newM, _ = model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'1'}}) // back to circuits
+	model = newM.(tui.Model)
+	assert.Equal(t, tui.ViewCircuits, model.CurrentView())
+
+	// Press 'd' to dry-run selected circuit
+	newM, dryCmd := model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'d'}})
+	model = newM.(tui.Model)
+	require.NotNil(t, dryCmd)
+	dryMsg := dryCmd()
+	newM, _ = model.Update(dryMsg)
+	model = newM.(tui.Model)
+
+	assert.Equal(t, tui.ViewEval, model.CurrentView())
+	assert.Equal(t, "fraud_sentinel", model.EvalView().ActiveCircuitID())
+	assert.Contains(t, model.View(), "Transferred circuit")
+}
+
+
 
 

@@ -7,6 +7,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.29.0] - 2026-10-26
+
+### Added
+
+- **Interactive Dry-Run Playground & Branch Evaluation REPL (`:eval`)** (`cmd/flux/tui/views/eval`, `cmd/flux/tui/model.go`):
+  - **Interactive Dry-Run Playground Model (`view.go`)**:
+    - Implemented split-screen `:eval` view (accessible via `:eval`, `:dryrun`, `:4` in cluster mode, or `:2` in standalone mode) for sandbox testing and debugging of complex streaming logic against production exemplars before deployment.
+    - Added multiline JSON event payload editor with line numbers, live syntax validation (`✓ Valid JSON` / `✗ Invalid JSON`), and auto-beautification (`f` / `Ctrl+F`).
+    - Added seamless circuit cycling (`c`) across all deployed circuits and instant handoff reception (`circuits.DryRunHandoffMsg`) from the `:circuits` view (`d`).
+    - Added dual-mode interaction supporting rapid editing in Insert Mode (`i` / `Enter`, `Ctrl+R` to run) and quick navigation in Normal Mode (`Tab`, `r`, `e`, `c`, `f`, `j`/`k` scrolling).
+  - **Fine-Grained Branch Tracing Runner (`runner.go`)**:
+    - Evaluates complete Circuit DAG hierarchies in sandbox shadow mode with 100% side-effect suppression.
+    - Tracks per-node guard condition outcomes (`PASSED`, `PRUNED`, `FAILED`, `SKIPPED`), sequential VoltScript mutations (`set(...)`), and simulated sink activations.
+    - Implemented Schema Tap exemplar loader (`e` / `Ctrl+E`) fetching live exemplars from Autopilot audit logs and Profiler cache keys, with intelligent synthetic domain fallbacks.
+  - **Color-Coded Visual Evaluation Tree & Simulated Sink Inspector (`tree_eval.go`)**:
+    - Renders the full DAG tree with color-coded branch flow: bright emerald green for taken branches (`[✓ TAKEN]`), dimmed slate gray for pruned dead subtrees (`[✗ PRUNED]`), neon cyan for VoltScript variable mutations, and neon amber/coral red for simulated sinks.
+    - Built-in **Simulated Outbound Sink Inspector** displaying all simulated outbound sink dispatches, destination sink names, firing conditions, and outbound payload snapshots with zero external network side-effects.
+
+---
+
 ## [0.28.0] - 2026-10-23
 
 ### Added
