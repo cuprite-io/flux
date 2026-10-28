@@ -7,6 +7,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.31.0] - 2026-10-28
+
+### Added
+
+- **End-to-End TUI Automation & Headless Verification Tests** (`cmd/flux/tui/tui_test.go`, `cmd/flux/tui/integration_test.go`):
+  - **Headless Test Harness & Automation Driver (`tui_test.go`)**:
+    - Implemented `HeadlessHarness` with thread-safe sequential event loop synchronization (`sync.Mutex`), typed key sending, named key helpers, and view assertion matchers.
+    - Added automated verification for switching between all views (`:circuits`, `:cache`, `:autopilot`, `:eval`, `:alerts`, `:cluster`, `:help`) across both Standalone and Cluster modes using numeric shortcuts, Tab cycling, and command bar inputs.
+    - Added command bar lifecycle tests verifying activation, editing, backspacing, cancelling (`Esc`), abbreviation shortcuts, and error handling for invalid commands.
+    - Added search filter lifecycle tests across multiple views verifying activation (`/`), query typing, committing, and cancellation.
+    - Added rapid-keystroke and concurrent background tick stress testing verifying zero race conditions and model stability.
+  - **Live End-to-End Server Integration Suite (`integration_test.go`)**:
+    - Built live ephemeral HTTP/SSE Admin server test harness (`e2eEngine`) simulating live circuits, cache namespaces, Autopilot sessions, and cluster topology.
+    - Added E2E live cockpit inspection verifying HTTP fetching of circuits, cache keys, autopilot sessions, and cluster topology.
+    - Added dry-run sandbox evaluation accuracy verification against live `/api/v1/eval` endpoint.
+    - Added real-time SSE alert streaming and feedback verification testing live event delivery over `/api/v1/alerts/stream` and feedback submission via `/api/v1/feedback`.
+    - Added network disconnection and auto-reconnection recovery tests verifying heartbeat ping updates and robust state handling during control plane downtime.
+    - Added high-throughput streaming burst stress tests verifying 500-alert memory bounding and zero goroutine leaks.
+
+---
+
 ## [0.30.0] - 2026-10-27
 
 ### Added
