@@ -22,6 +22,7 @@ import (
 	clusterview "github.com/cuprite-io/flux/cmd/flux/tui/views/cluster"
 	autopilotview "github.com/cuprite-io/flux/cmd/flux/tui/views/autopilot"
 	evalview "github.com/cuprite-io/flux/cmd/flux/tui/views/eval"
+	alertsview "github.com/cuprite-io/flux/cmd/flux/tui/views/alerts"
 )
 
 // TickMsg triggers regular background UI refresh.
@@ -35,6 +36,7 @@ type Model struct {
 	clusterView   clusterview.Model
 	autopilotView autopilotview.Model
 	evalView      evalview.Model
+	alertsView    alertsview.Model
 	keys          KeyMap
 	currentView  ViewID
 	previousView ViewID
@@ -111,6 +113,7 @@ func NewModel(cfg Config) Model {
 		clusterView:   clusterview.New(cli),
 		autopilotView: autopilotview.New(cli),
 		evalView:      evalview.New(cli),
+		alertsView:    alertsview.New(cli),
 		keys:          DefaultKeyMap(),
 		currentView:   ViewCircuits,
 		previousView:  ViewCircuits,
@@ -157,6 +160,11 @@ func (m Model) EvalView() evalview.Model {
 	return m.evalView
 }
 
+// AlertsView returns the Live Alerts stream and feedback view component.
+func (m Model) AlertsView() alertsview.Model {
+	return m.alertsView
+}
+
 // Syncer returns the local snapshot synchronization engine.
 func (m Model) Syncer() *tuisync.Syncer {
 	return m.syncer
@@ -192,6 +200,7 @@ func (m *Model) SetDimensions(w, h int) {
 	m.clusterView.SetDimensions(w-4, contentHeight-2)
 	m.autopilotView.SetDimensions(w-4, contentHeight-2)
 	m.evalView.SetDimensions(w-4, contentHeight-2)
+	m.alertsView.SetDimensions(w-4, contentHeight-2)
 }
 
 // CurrentView returns the currently active view ID.
@@ -257,6 +266,7 @@ func (m Model) Init() tea.Cmd {
 		m.clusterView.Init(),
 		m.autopilotView.Init(),
 		m.evalView.Init(),
+		m.alertsView.Init(),
 	)
 }
 
@@ -290,6 +300,14 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		var cmd tea.Cmd
 		m.evalView, cmd = m.evalView.Update(msg)
 		if status := m.evalView.StatusMsg(); status != "" {
+			m.SetStatus(status, false)
+		}
+		return m, cmd
+
+	case alertsview.AlertHistoryLoadedMsg, alertsview.AlertStreamStartedMsg, alertsview.AlertStreamEventMsg, alertsview.AlertStreamErrorMsg, alertsview.FeedbackSubmittedMsg:
+		var cmd tea.Cmd
+		m.alertsView, cmd = m.alertsView.Update(msg)
+		if status := m.alertsView.StatusMsg(); status != "" {
 			m.SetStatus(status, false)
 		}
 		return m, cmd
@@ -343,6 +361,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				cmds = append(cmds, m.clusterView.SetClient(m.syncer.Client(m.client)))
 				cmds = append(cmds, m.autopilotView.SetClient(m.syncer.Client(m.client)))
 				cmds = append(cmds, m.evalView.SetClient(m.syncer.Client(m.client)))
+				cmds = append(cmds, m.alertsView.SetClient(m.syncer.Client(m.client)))
 			}
 		}
 		return m, tea.Batch(cmds...)
@@ -356,6 +375,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		cmds = append(cmds, m.clusterView.SetClient(m.client))
 		cmds = append(cmds, m.autopilotView.SetClient(m.client))
 		cmds = append(cmds, m.evalView.SetClient(m.client))
+		cmds = append(cmds, m.alertsView.SetClient(m.client))
 		return m, tea.Batch(cmds...)
 
 	case TickMsg:
@@ -418,6 +438,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 						cmds = append(cmds, m.clusterView.SetClient(m.client))
 						cmds = append(cmds, m.autopilotView.SetClient(m.client))
 						cmds = append(cmds, m.evalView.SetClient(m.client))
+						cmds = append(cmds, m.alertsView.SetClient(m.client))
 					}
 					m.SetStatus(fmt.Sprintf("Connected to %s (Cluster Mode)", probeRes.URL), false)
 					cmds = append(cmds, m.WindowTitleCmd())
@@ -710,6 +731,46 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 		}
 
+		if m.currentView == ViewAlerts {
+			if m.alertsView.IsModalActive() || m.alertsView.IsFiltering() {
+				var cmd tea.Cmd
+				m.alertsView, cmd = m.alertsView.Update(msg)
+				if status := m.alertsView.StatusMsg(); status != "" {
+					m.SetStatus(status, false)
+				}
+				return m, cmd
+			}
+
+			if key.Matches(msg, m.keys.Command) {
+				m.commandMode = true
+				m.commandInput.Focus()
+				return m, textinput.Blink
+			}
+
+			switch msg.String() {
+			case "f", "p", " ", "/", "r", "tab":
+				var cmd tea.Cmd
+				m.alertsView, cmd = m.alertsView.Update(msg)
+				if status := m.alertsView.StatusMsg(); status != "" {
+					m.SetStatus(status, false)
+				}
+				return m, cmd
+			}
+
+			if key.Matches(msg, m.keys.Enter) || key.Matches(msg, m.keys.Escape) ||
+				key.Matches(msg, m.keys.Up) || key.Matches(msg, m.keys.Down) ||
+				msg.String() == "k" || msg.String() == "j" ||
+				msg.String() == "pgup" || msg.String() == "pgdown" ||
+				msg.String() == "u" || msg.String() == "ctrl+d" {
+				var cmd tea.Cmd
+				m.alertsView, cmd = m.alertsView.Update(msg)
+				if status := m.alertsView.StatusMsg(); status != "" {
+					m.SetStatus(status, false)
+				}
+				return m, cmd
+			}
+		}
+
 		// Normal Mode Key Handlers
 		switch {
 		case key.Matches(msg, m.keys.Quit):
@@ -960,6 +1021,17 @@ func (m Model) renderFooter() string {
 			StyleKey.Render("/") + StyleKeyHelp.Render(" filter, ") +
 			StyleKey.Render("r") + StyleKeyHelp.Render(" refresh, ") +
 			StyleKey.Render(":") + StyleKeyHelp.Render(" commands")
+	} else if m.currentView == ViewAlerts && m.alertsView.IsModalActive() {
+		left = StyleStatusMsg.Render("Feedback modal active. Select classification (1-4/h/l), edit note, Enter to submit, Esc to cancel.")
+	} else if m.currentView == ViewAlerts && m.alertsView.IsFiltering() {
+		left = StyleStatusMsg.Render("Filter mode active. Type search query, Enter to accept, Esc to cancel.")
+	} else if m.currentView == ViewAlerts {
+		left = StyleKeyHelp.Render("Press ") + StyleKey.Render("Tab") + StyleKeyHelp.Render(" switch panel, ") +
+			StyleKey.Render("f") + StyleKeyHelp.Render(" feedback, ") +
+			StyleKey.Render("p") + StyleKeyHelp.Render(" pause/resume, ") +
+			StyleKey.Render("/") + StyleKeyHelp.Render(" filter, ") +
+			StyleKey.Render("r") + StyleKeyHelp.Render(" refresh, ") +
+			StyleKey.Render(":") + StyleKeyHelp.Render(" commands")
 	} else {
 		left = StyleKeyHelp.Render("Press ") + StyleKey.Render(":") + StyleKeyHelp.Render(" for commands, ") +
 			StyleKey.Render("Tab") + StyleKeyHelp.Render(" switch view, ") +
@@ -998,15 +1070,7 @@ func (m Model) renderContent(height int) string {
 		return StyleViewport.Render(m.evalView.View())
 
 	case ViewAlerts:
-		return panelStyle.Render(m.placeholderPanel(
-			"📟 Live Alert Stream & Feedback Monitor (:alerts)",
-			"No alerts recorded yet.",
-			[]string{
-				"• Real-time streaming feed of all alerts dispatched across circuits and sinks.",
-				"• Press 'f' to open Operator Feedback Modal: tag false_positive or true_positive.",
-				"• Operator feedback immediately drives closed-loop autonomous refinement.",
-			},
-		))
+		return StyleViewport.Render(m.alertsView.View())
 
 	case ViewCluster:
 		return StyleViewport.Render(m.clusterView.View())

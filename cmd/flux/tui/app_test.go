@@ -14,6 +14,7 @@ import (
 	"github.com/cuprite-io/flux/cmd/flux/tui"
 	"github.com/cuprite-io/flux/cmd/flux/tui/client"
 	tuisync "github.com/cuprite-io/flux/cmd/flux/tui/sync"
+	alertsview "github.com/cuprite-io/flux/cmd/flux/tui/views/alerts"
 	cacheview "github.com/cuprite-io/flux/cmd/flux/tui/views/cache"
 	"github.com/cuprite-io/flux/cmd/flux/tui/views/circuits"
 	clusterview "github.com/cuprite-io/flux/cmd/flux/tui/views/cluster"
@@ -1310,6 +1311,125 @@ func TestTUI_EvalView_NavigationAndInteraction(t *testing.T) {
 	assert.Equal(t, "fraud_sentinel", model.EvalView().ActiveCircuitID())
 	assert.Contains(t, model.View(), "Transferred circuit")
 }
+
+func TestTUI_AlertsView_NavigationAndInteraction(t *testing.T) {
+	m := tui.NewModel(tui.Config{})
+	m.SetDimensions(120, 30)
+
+	// 1. Navigate to :alerts via :alerts command
+	newM, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{':'}})
+	model := newM.(tui.Model)
+	for _, r := range "alerts" {
+		newM, _ = model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{r}})
+		model = newM.(tui.Model)
+	}
+	newM, _ = model.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	model = newM.(tui.Model)
+	assert.Equal(t, tui.ViewAlerts, model.CurrentView())
+
+	// 2. Verify initial view rendering
+	viewStr := model.View()
+	assert.Contains(t, viewStr, "Real-Time Alert Stream & Human-in-the-Loop Feedback")
+	assert.Contains(t, viewStr, "STREAM LIVE")
+	assert.Contains(t, viewStr, "Unreviewed: 0")
+
+	// 3. Stream in an alert event
+	event := client.AlertEvent{
+		ID:        "alert-sec-101",
+		CircuitID: "anomaly_detector",
+		NodeName:  "node-1",
+		SinkName:  "pagerduty",
+		Condition: "fraud_score > 90",
+		Timestamp: time.Now(),
+		Payload: map[string]interface{}{
+			"user_id": "usr_9981",
+			"amount":  45000.50,
+			"ip":      "192.168.1.100",
+		},
+	}
+	newM, _ = model.Update(alertsview.AlertStreamEventMsg{
+		Event: event,
+	})
+	model = newM.(tui.Model)
+	require.Len(t, model.AlertsView().Alerts(), 1)
+	assert.Equal(t, "alert-sec-101", model.AlertsView().Alerts()[0].ID)
+	assert.Contains(t, model.View(), "alert-sec-101")
+	assert.Contains(t, model.View(), "anomaly_detector")
+	assert.Contains(t, model.View(), "pagerduty")
+	assert.Contains(t, model.View(), "[UNREVIEWED]")
+
+	// 4. Test pausing and resuming stream via 'p'
+	newM, _ = model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'p'}})
+	model = newM.(tui.Model)
+	assert.Contains(t, model.View(), "STREAM PAUSED")
+
+	newM, _ = model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'p'}})
+	model = newM.(tui.Model)
+	assert.Contains(t, model.View(), "STREAM LIVE")
+
+	// 5. Test Tab key switching pane focus
+	newM, _ = model.Update(tea.KeyMsg{Type: tea.KeyTab})
+	model = newM.(tui.Model)
+
+	// 6. Test Feedback Modal ('f' key)
+	newM, _ = model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'f'}})
+	model = newM.(tui.Model)
+	assert.True(t, model.AlertsView().IsModalActive())
+	assert.Contains(t, model.View(), "Submit Operator Feedback on Alert")
+	assert.Contains(t, model.View(), "false_positive")
+	assert.Contains(t, model.View(), "valid")
+
+	// Press '1' to select false_positive
+	newM, _ = model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'1'}})
+	model = newM.(tui.Model)
+
+	// Press Tab to navigate to Notes input
+	newM, _ = model.Update(tea.KeyMsg{Type: tea.KeyTab})
+	model = newM.(tui.Model)
+
+	// Type note
+	for _, r := range "authorized penetration test" {
+		newM, _ = model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{r}})
+		model = newM.(tui.Model)
+	}
+
+	// Submit modal via Enter and deliver FeedbackSubmittedMsg
+	newM, _ = model.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	model = newM.(tui.Model)
+
+	newM, _ = model.Update(alertsview.FeedbackSubmittedMsg{
+		AlertID:      "alert-sec-101",
+		CircuitID:    "anomaly_detector",
+		FeedbackType: "false_positive",
+		Notes:        "authorized penetration test",
+		Operator:     "operator",
+	})
+	model = newM.(tui.Model)
+	assert.False(t, model.AlertsView().IsModalActive())
+	assert.Contains(t, model.View(), "[FALSE POSITIVE ✗]")
+	require.NotNil(t, model.AlertsView().Alerts()[0].Feedback)
+	assert.Equal(t, "false_positive", model.AlertsView().Alerts()[0].Feedback.Classification)
+	assert.Equal(t, "authorized penetration test", model.AlertsView().Alerts()[0].Feedback.Reason)
+
+	// 7. Test filtering ('/' key)
+	newM, _ = model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'/'}})
+	model = newM.(tui.Model)
+	assert.True(t, model.AlertsView().IsFiltering())
+
+	for _, r := range "nonexistent" {
+		newM, _ = model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{r}})
+		model = newM.(tui.Model)
+	}
+	newM, _ = model.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	model = newM.(tui.Model)
+	assert.False(t, model.AlertsView().IsFiltering())
+
+	// Press Esc to clear filter
+	newM, _ = model.Update(tea.KeyMsg{Type: tea.KeyEscape})
+	model = newM.(tui.Model)
+	assert.Contains(t, model.View(), "alert-sec-101")
+}
+
 
 
 

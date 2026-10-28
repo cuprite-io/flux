@@ -7,6 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.30.0] - 2026-10-27
+
+### Added
+
+- **Real-Time Alert Stream & Human-in-the-Loop Feedback (`:alerts`)** (`cmd/flux/tui/views/alerts`, `cmd/flux/tui/model.go`):
+  - **Live Alert Stream Cockpit (`view.go`)**:
+    - Implemented `:alerts` view (accessible via `:alerts`, `:alert`, `:al`, or tab shortcut `4` in Standalone / `5` in Cluster) streaming real-time alerts fired by all circuits and sinks over Admin SSE (`/api/v1/alerts/stream`).
+    - Added real-time table display showing timestamp, circuit ID, node name, sink destination, trigger condition, payload summary, and color-coded feedback classification status (`[UNREVIEWED]`, `[FALSE POSITIVE ✗]`, `[VALID ✓]`, `[NOISY ~]`, `[MUTED ⊘]`).
+    - Integrated split-screen Detail Inspector pane with collapsible raw JSON payload viewer, context metadata, sink dispatches, and operator feedback history.
+    - Added stream controls with pause/resume toggle (`p` / `Space`), query search filtering (`/`), and history refresh (`r`).
+  - **Operator Feedback Modal & Closed-Loop Refinement (`feedback_modal.go`)**:
+    - Added interactive overlay modal dialog (`f`) allowing operators to classify alerts as `false_positive`, `valid`, `noisy`, or `muted`.
+    - Integrated text inputs for operator notes/rationale and operator username identification, with quick keyboard shortcuts (`1-4`, `h`/`l`, `Tab`, `Enter`).
+    - Submits classifications via `client.SubmitFeedback` to write directly to cache backend (`alert:feedback:*`) and trigger closed-loop autonomous refinement (`TriggerRefinement`) on the leader node for rapid adaptation.
+
+---
+
 ## [0.29.0] - 2026-10-26
 
 ### Added
